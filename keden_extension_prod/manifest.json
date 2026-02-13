@@ -1,0 +1,35 @@
+{
+    "manifest_version": 3,
+    "name": "Keden PI PROD",
+    "version": "1.0",
+    "description": "AI-powered PI declaration filler for PRODUCTION (keden.kgd.gov.kz)",
+    "permissions": [
+        "storage",
+        "activeTab",
+        "scripting"
+    ],
+    "host_permissions": [
+        "https://keden.kgd.gov.kz/*",
+        "https://generativelanguage.googleapis.com/*"
+    ],
+    "action": {
+        "default_popup": "popup.html",
+        "default_icon": "icon.png"
+    },
+    "icons": {
+        "128": "icon.png"
+    },
+    "content_scripts": [
+        {
+            "matches": [
+                "https://keden.kgd.gov.kz/*"
+            ],
+            "js": [
+                "content/mappers.js",
+                "content/api.js",
+                "content/enrichment.js",
+                "content/main.js"
+            ]
+        }
+    ]
+}

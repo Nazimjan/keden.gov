@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg: #0f172a;
+            --glass: rgba(255, 255, 255, 0.05);
+            --accent: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+            --text: #f8fafc;
+        }
+
+        body {
+            /* Remove fixed width to allow expansion */
+            background-color: var(--bg);
+            color: var(--text);
+            font-family: 'Outfit', sans-serif;
+            margin: 0;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            justify-content: center;
+        }
+
+        .container {
+            background: var(--glass);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 24px;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            width: 350px;
+            transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            box-sizing: border-box;
+        }
+
+        .container.expanded {
+            width: 900px;
+        }
+
+        .content-layout {
+            display: flex;
+            gap: 24px;
+            flex-direction: column;
+        }
+
+        .container.expanded .content-layout {
+            flex-direction: row;
+            align-items: flex-start;
+        }
+
+        .side-panel {
+            flex: 0 0 300px;
+            width: 100%;
+        }
+
+        .preview-panel {
+            flex: 1;
+            display: none;
+            max-height: 600px;
+            overflow-y: auto;
+            padding-right: 8px;
+        }
+
+        .container.expanded .preview-panel {
+            display: block;
+        }
+
+        /* Scrollbar styling */
+        .preview-panel::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .preview-panel::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+        }
+
+        .preview-panel::-webkit-scrollbar-thumb {
+            background: rgba(168, 85, 247, 0.3);
+            border-radius: 10px;
+        }
+
+        h1 {
+            font-size: 20px;
+            font-weight: 600;
+            margin: 0 0 8px 0;
+            background: var(--accent);
+            -webkit-background-clip: text;
+            background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            font-size: 12px;
+            color: #94a3b8;
+            margin-bottom: 24px;
+        }
+
+        .upload-area {
+            border: 2px dashed rgba(255, 255, 255, 0.2);
+            border-radius: 12px;
+            padding: 30px 10px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-bottom: 20px;
+        }
+
+        .upload-area:hover {
+            border-color: #a855f7;
+            background: rgba(168, 85, 247, 0.05);
+        }
+
+        .upload-area svg {
+            width: 40px;
+            height: 40px;
+            margin-bottom: 12px;
+            color: #a855f7;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border-radius: 12px;
+            border: none;
+            background: var(--accent);
+            color: white;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s ease, opacity 0.2s ease;
+            box-shadow: 0 4px 15px rgba(168, 85, 247, 0.4);
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            opacity: 0.9;
+        }
+
+        .status {
+            margin-top: 20px;
+            font-size: 11px;
+            padding: 10px;
+            border-radius: 8px;
+            background: rgba(0, 0, 0, 0.2);
+            display: none;
+        }
+
+        .loader {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #a855f7;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 10px auto;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            padding-bottom: 10px;
+        }
+
+        .tab {
+            background: none;
+            border: none;
+            color: #94a3b8;
+            cursor: pointer;
+            padding: 5px 10px;
+            font-size: 14px;
+            position: relative;
+        }
+
+        .tab.active {
+            color: #a855f7;
+            font-weight: 600;
+        }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -11px;
+            left: 0;
+            width: 100%;
+            height: 2px;
+            background: #a855f7;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-group label {
+            display: block;
+            font-size: 11px;
+            color: #94a3b8;
+            margin-bottom: 5px;
+        }
+
+        .input-group input {
+            width: 100%;
+            padding: 10px;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: rgba(0, 0, 0, 0.2);
+            color: white;
+            box-sizing: border-box;
+        }
+
+        .row {
+            display: flex;
+            gap: 10px;
+        }
+
+        .preview-section {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 15px;
+        }
+
+        .preview-section h3 {
+            font-size: 12px;
+            margin-top: 0;
+            margin-bottom: 8px;
+            color: #94a3b8;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 4px;
+        }
+
+        .preview-table {
+            width: 100%;
+            font-size: 11px;
+            border-collapse: collapse;
+        }
+
+        .preview-table th {
+            text-align: left;
+            color: #64748b;
+            padding: 4px;
+        }
+
+        .preview-table td {
+            padding: 4px;
+        }
+
+        .preview-input {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            color: white;
+            padding: 4px 4px;
+            /* Reduced horizontal padding */
+            font-size: 11px;
+            width: 100%;
+            box-sizing: border-box;
+        }
+
+        /* Hide number input arrows (spinners) */
+        input::-webkit-outer-spin-button,
+        input::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            appearance: none;
+            margin: 0;
+        }
+
+        input[type=number] {
+            -moz-appearance: textfield;
+            appearance: textfield;
+        }
+
+        .preview-input:focus {
+            border-color: #a855f7;
+            outline: none;
+        }
+
+        /* TNVED Validation Styles */
+        .tnved-valid {
+            border-color: #22c55e !important;
+            background: rgba(34, 197, 94, 0.1) !important;
+        }
+
+        .tnved-invalid {
+            border-color: #ef4444 !important;
+            background: rgba(239, 68, 68, 0.1) !important;
+        }
+
+        .tnved-loading {
+            border-color: #64748b !important;
+            animation: tnved-pulse 1.5s ease-in-out infinite;
+        }
+
+        @keyframes tnved-pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container" id="mainContainer">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h1>KEDEN AI</h1>
+            <button id="openTabBtn" title="Открыть в новой вкладке"
+                style="background:none; border:none; cursor:pointer; color: #a855f7; font-size: 18px;">⤢</button>
+        </div>
+
+        <div class="content-layout">
+            <div class="side-panel">
+                <div class="upload-area" id="dropZone">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"
+                        style="width:40px;height:40px;color:#a855f7;margin-bottom:12px;">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12">
+                        </path>
+                    </svg>
+                    <div style="font-size: 13px;">Загрузите документы (PDF, Excel, Фото)</div>
+                    <div style="font-size: 10px; color: #64748b; margin-top: 4px;">можно выбрать несколько файлов</div>
+                    <input type="file" id="fileInput" hidden multiple accept=".pdf,.xlsx,.docx,.txt,.png,.jpg,.jpeg">
+                </div>
+
+                <div id="fileList" style="margin-bottom: 15px; font-size: 11px; max-height: 100px; overflow-y: auto;">
+                </div>
+
+                <div id="mainActions">
+                    <button class="btn" id="startBtn">ЗАПОЛНИТЬ ПИ</button>
+                </div>
+            </div>
+
+            <div id="previewArea" class="preview-panel">
+                <h2 style="font-size: 14px; margin-bottom: 10px; color: #a855f7;">Предпросмотр данных</h2>
+                <div id="previewContent"></div>
+                <button class="btn" id="confirmFillBtn" style="margin-top: 15px;">ПОДТВЕРДИТЬ И ЗАПОЛНИТЬ</button>
+            </div>
+        </div>
+
+
+        <div class="loader" id="loader"></div>
+        <div class="status" id="statusMessage"></div>
+    </div>
+    <script src="lib/xlsx.full.min.js"></script>
+    <script src="lib/pdf.min.js"></script>
+    <script src="popup/ui.js"></script>
+    <script src="popup/file_readers.js"></script>
+    <script src="popup/gemini.js"></script>
+    <script src="popup/tnved.js"></script>
+    <script src="popup/main.js"></script>
+</body>
+
+</html>
