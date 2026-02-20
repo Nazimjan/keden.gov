@@ -85,6 +85,52 @@ async function fillCounteragents(params) {
         }
     }
 
+    // ОБРАБОТКА ТАМОЖЕННЫХ ПОСТОВ И ВИДОВ ТРАНСПОРТА (Справочник)
+    if (params.shipping && (params.shipping.customsCode || params.shipping.transportMode)) {
+        console.log('🏛️ DEBUG: Updating Customs/Transport settings');
+        try {
+            const currentDecl = await getPIDeclaration(declId, headers);
+            let updated = false;
+
+            if (params.shipping.customsCode) {
+                const customsData = await fetchCustomsByCode(params.shipping.customsCode, headers);
+                if (customsData) {
+                    currentDecl.customs = customsData;
+                    updated = true;
+                    console.log('✅ Customs data fetched');
+                }
+            }
+
+            if (params.shipping.transportMode) {
+                const transportData = await fetchTransportModeByCode(params.shipping.transportMode, headers);
+                if (transportData) {
+                    const dictCode = transportData.dictionaryDto?.code;
+                    if (dictCode === 'pi_vehicle_type_classifier') {
+                        currentDecl.vehicleType = transportData;
+                        console.log('✅ Root vehicleType updated');
+                    } else {
+                        if (!currentDecl.productsTransportation) {
+                            currentDecl.productsTransportation = { containerTransportation: false, matchesVehicleAtBorder: false };
+                        }
+                        if (!currentDecl.productsTransportation.vehicleAtBorder) {
+                            currentDecl.productsTransportation.vehicleAtBorder = { transportMeansQuantity: 0, vehicles: [], routePoints: [], multimodalitySign: false };
+                        }
+                        currentDecl.productsTransportation.vehicleAtBorder.vehicleType = transportData;
+                        console.log('✅ Border vehicleType updated');
+                    }
+                    updated = true;
+                }
+            }
+
+            if (updated) {
+                await updatePIDeclaration(declId, currentDecl, headers);
+                console.log('✅ Declaration updated with Customs/Transport data');
+            }
+        } catch (err) {
+            console.error('❌ Customs/Transport update failed:', err);
+        }
+    }
+
     const hasConsignmentAgents = Boolean(counteragents.consignor?.present || counteragents.consignee?.present);
     const hasProducts = Boolean(params.products && params.products.length > 0);
 

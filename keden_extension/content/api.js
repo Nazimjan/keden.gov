@@ -161,6 +161,88 @@ async function fetchDocumentTypes(headers) {
     return JSON.parse(text);
 }
 
+async function fetchCustomsByCode(code, headers) {
+    console.log(`[API] Fetching customs by code: ${code}`);
+    // Try by-code first (although it often fails with 404)
+    let url = `${API_HOST}/api/v1/auth/customs/by-code/${code}`;
+    try {
+        let resp = await fetch(url, { headers });
+        if (resp.ok) {
+            const text = await resp.text();
+            if (text && text.trim() !== "") {
+                console.log(`[API] Found customs via by-code: ${code}`);
+                return JSON.parse(text);
+            }
+        }
+    } catch (e) { console.error("[API] Error in by-code fetch:", e); }
+
+    // Fallback 1: specialized customs-post handbook (common in PI declarations)
+    url = `${API_HOST}/api/v1/handbook/customs-post?kzOnly=true`;
+    try {
+        console.log(`[API] Trying customs-post handbook search for ${code}`);
+        const resp = await fetch(url, { headers });
+        if (resp.ok) {
+            const entries = await resp.json();
+            const found = entries.find(e => e.code === code || e.fullCode === code || e.fullCode === `398${code}`);
+            if (found) {
+                console.log(`[API] Found customs in customs-post handbook: ${code}`);
+                return found;
+            }
+        }
+    } catch (e) { console.error(`[API] Error in customs-post fallback:`, e); }
+
+    // Fallback 2: general classifiers
+    const classifiers = ['customs_post_classifier', 'customs_classifier'];
+    for (const classifier of classifiers) {
+        url = `${API_HOST}/api/v1/handbook/entries/search/${classifier}?query=${code}&pageSize=100`;
+        try {
+            console.log(`[API] Trying fallback search in ${classifier} for ${code}`);
+            const resp = await fetch(url, { headers });
+            if (resp.ok) {
+                const entries = await resp.json();
+                const found = entries.find(e => e.code === code || e.fullCode === code);
+                if (found) {
+                    console.log(`[API] Found customs in ${classifier}: ${code}`);
+                    return found;
+                }
+            }
+        } catch (e) { console.error(`[API] Error in ${classifier} fallback:`, e); }
+    }
+
+    console.warn(`[API] Customs not found for code: ${code}`);
+    return null;
+}
+
+async function fetchTransportModeByCode(code, headers) {
+    console.log(`[API] Fetching transport mode by code: ${code}`);
+    // We try two different classifiers: one for "31", "30" (border) and one for "Auto", "AIR" (root)
+    const classifiers = [
+        'transport_and_goods_transportation_types_classifier',
+        'pi_vehicle_type_classifier'
+    ];
+
+    for (const classifier of classifiers) {
+        const url = `${API_HOST}/api/v1/handbook/entries/search/${classifier}?pageSize=1000`;
+        try {
+            console.log(`[API] Trying transport classifier: ${classifier}`);
+            const resp = await fetch(url, { headers });
+            if (resp.ok) {
+                const entries = await resp.json();
+                const found = entries.find(e => e.code === code);
+                if (found) {
+                    console.log(`[API] Found transport mode in ${classifier}: ${code}`);
+                    return found;
+                }
+            }
+        } catch (e) {
+            console.error(`[API] Error fetching from ${classifier}:`, e);
+        }
+    }
+
+    console.warn(`[API] Transport mode not found for code: ${code}`);
+    return null;
+}
+
 async function postDocument(consignmentId, payload, headers) {
     const url = `${PI_API}/documents/consignment/${consignmentId}`;
     const resp = await fetch(url, {
