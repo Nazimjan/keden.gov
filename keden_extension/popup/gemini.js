@@ -1,127 +1,241 @@
-const GEMINI_API_KEY = 'AIzaSyBXIWN27uFhh5xKFHVwclFpkbE4ZDDc82M';
+const OPENROUTER_API_KEY = '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';
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-async function askGeminiComplex(inputParts) {
-  console.log('Calling Gemini API (PI Fast Mode)...');
-  setStatus('🤖 Gemini изучает документы...');
+// Гибридная стратегия:
+const MODEL_VISION = "qwen/qwen3.5-plus-02-15"; // Для картинок и сканов
+const MODEL_TEXT = "minimax/minimax-m2.5";      // Для Excel и чистого текста
 
-  const promptPart = {
-    text: `
-            Ты - эксперт по ПИ (Предварительное Информирование) в таможенной системе Keden.
-            Твоя задача: проанализировать документы (инвойсы, CMR) и извлечь данные по контрагентам и транспортным средствам.
-            
-            ВАЖНО:
-            1. Для страны используй только 2-буквенный код ISO (CN, KZ, AF, RU и т.д.).
-            2. СТРАНЫ: Обязательно определи "Страну отправления" (departureCountry) и "Страну назначения" (destinationCountry). Обычно это CN (Китай) и AF (Афганистан) или KZ (Казахстан).
-            3. ТРАНСПОРТ: Ищи регистрационные номера тягача (tractor) и прицепа (trailer).
-            4. БИН/ИИН: ВСЕГДА должны состоять ровно из 12 цифр. Если в документе число меньше или больше 12 цифр - это НЕ БИН/ИИН, игнорируй его для этих полей.
-            4. Если у контрагента есть БИН/ИИН (12 цифр) - это РЕЗИДЕНТ (entityType: "LEGAL" или "PERSON").
-            5. Если БИН нет, но это иностранная компания - это НЕРЕЗИДЕНТ (entityType: "NON_RESIDENT_LEGAL").
-            6. Для НЕРЕЗИДЕНТОВ город/населенный пункт пиши ТАКЖЕ в поле "district" ВЕРХНИМ РЕГИСТРОМ (например: "KHORGOS").
-            7. Для Перевозчика (carrier) обязательно ищи адрес, если он нерезидент.
-            8. ТОВАРЫ:
-               - Извлеки список товаров.
-               - Для каждого товара обязателен код ТН ВЭД (tnvedCode).
-               - ВАЖНО: возвращай ТОЛЬКО первых 6 цифр кода ТН ВЭД. Это критически важно.
-               - Если в документе 10 цифр, обрежь до 6.
-            
-            ПРАВИЛА ДЛЯ EXCEL (CSV):
-            - Данные часто идут в колонках: Перевозчик, Отправитель, Получатель.
-            - Будь внимателен: адрес во второй колонке относится к Отправителю, в третьей - к Получателю. 
-            - Не перепутай БИН перевозчика с БИН получателя.
-            - Если видишь "БИН 201040018125" - это Carrier, НЕ придумывай другие числа.
+// Retry configuration
+const MAX_RETRIES = 3;
+const BASE_DELAY_SECONDS = 5;
+const MAX_DELAY_SECONDS = 10;
 
-            ФОРМАТ JSON:
-            {
-              "counteragents": {
-                "consignor": {
-                  "present": true,
-                  "entityType": "NON_RESIDENT_LEGAL",
-                  "nonResidentLegal": { "nameRu": "НАЗВАНИЕ_КОМПАНИИ" },
-                  "addresses": [{
-                    "addressType": {"id": 2014, "code": "1", "ru": "Адрес регистрации"},
-                    "countryCode": "CN",
-                    "district": "ГОРОД_ВЕРХНИМ_РЕГИСТРОМ"
-                  }]
-                },
-                "consignee": {
-                  "present": true,
-                  "entityType": "LEGAL или NON_RESIDENT_LEGAL",
-                  "legal": { "bin": "БИН", "nameRu": "НАЗВАНИЕ" },
-                  "nonResidentLegal": { "nameRu": "НАЗВАНИЕ" },
-                  "addresses": [{
-                    "addressType": {"id": 2014, "code": "1", "ru": "Адрес регистрации"},
-                    "countryCode": "AF",
-                    "district": "ГОРОД_ВЕРХНИМ_РЕГИСТРОМ"
-                  }]
-                },
-                "carrier": {
-                  "present": true,
-                  "entityType": "LEGAL или NON_RESIDENT_LEGAL",
-                  "legal": { "bin": "БИН_12_ЦИФР", "nameRu": "ДАННЫЕ_ПОДТЯНУТСЯ_ПО_БИН" },
-                  "nonResidentLegal": { "nameRu": "НАЗВАНИЕ" },
-                  "addresses": [{
-                    "addressType": {"id": 2014, "code": "1", "ru": "Адрес регистрации"},
-                    "countryCode": "ISO_CODE",
-                    "district": "ГОРОД_ВЕРХНИМ_РЕГИСТРОМ"
-                  }]
-                },
-                "declarant": {
-                  "present": true,
-                  "entityType": "LEGAL",
-                  "legal": { "bin": "БИН_12_ЦИФР", "nameRu": "ДАННЫЕ_ПОДТЯНУТСЯ_ПО_БИН" }
-                },
-                "filler": {
-                  "present": true,
-                  "entityType": "PERSON",
-                  "person": { "iin": "ИИН_12_ЦИФР", "lastName": "ФАМИЛИЯ", "firstName": "ИМЯ", "middleName": "ОТЧЕСТВО" }
-                }
-              },
-              "countries": {
-                "departureCountry": "CN",
-                "destinationCountry": "AF"
-              },
-              "vehicles": {
-                "tractorRegNumber": "НОМЕР_ТЯГАЧА",
-                "tractorCountry": "ISO_CODE",
-                "trailerRegNumber": "НОМЕР_ПРИЦЕПА_ЕСЛИ_ЕСТЬ",
-                "trailerCountry": "ISO_CODE_ЕСЛИ_ЕСТЬ"
-              },
-              "driver": {
-                "present": true,
-                "iin": "ИИН_ВОДИТЕЛЯ_12_ЦИФР",
-                "firstName": "ИМЯ",
-                "lastName": "ФАМИЛИЯ"
-              },
-              "products": [
-                {
-                  "tnvedCode": "6_DIGITS_ONLY",
-                  "commercialName": "DESCRIPTION",
-                  "grossWeight": 100,
-                  "cost": 500, // Total cost of this product line
-                  "currencyCode": "USD", // ISO currency code
-                  "quantity": 10, // Number of packages/seats (Кол-во мест)
-                  "packageType": "PK" // Package type code (e.g., PK, BX, CT)
-                }
-              ]
-            }
-        `
-  };
+/**
+ * Wait for specified seconds and update status
+ */
+async function waitWithCountdown(seconds, customMessage) {
+  for (let i = seconds; i > 0; i--) {
+    setStatus(`⏳ ${customMessage} ${i}s...`);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [promptPart, ...inputParts] }],
-      generationConfig: {
-        responseMimeType: "application/json"
+/**
+ * Common fetch with retry logic for OpenRouter
+ */
+async function fetchWithRetry(url, options, attempt = 1) {
+  try {
+    const response = await fetch(url, options);
+    let data;
+    try {
+      data = await response.json();
+    } catch (e) {
+      if (!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      throw e;
+    }
+
+    // Quota/Rate limit check
+    if (response.status === 429 || (data.error && data.error.code === 429)) {
+      let retryDelay = Math.min(BASE_DELAY_SECONDS * Math.pow(2, attempt - 1), MAX_DELAY_SECONDS);
+      if (attempt >= MAX_RETRIES) throw new Error(`Лимит запросов исчерпан.`);
+      console.log(`429 Error. Waiting ${retryDelay}s...`);
+      await waitWithCountdown(retryDelay, `Лимит исчерпан, повтор через`);
+      return fetchWithRetry(url, options, attempt + 1);
+    }
+
+    if (data.error) {
+      throw new Error(`API Error: ${data.error.message || JSON.stringify(data.error)}`);
+    }
+
+    if (!response.ok) throw new Error(`API failed with status ${response.status}`);
+
+    return data;
+  } catch (err) {
+    if (attempt >= MAX_RETRIES) throw err;
+    console.warn(`⚠️ Попытка ${attempt}/${MAX_RETRIES}: ${err.message}`);
+    await waitWithCountdown(3, 'Ошибка, повтор через');
+    return fetchWithRetry(url, options, attempt + 1);
+  }
+}
+
+/**
+ * Converts internal parts to OpenAI-style content for OpenRouter
+ */
+function convertToOpenAIContent(filePart, promptText) {
+  const content = [{ type: "text", text: promptText }];
+
+  const parts = Array.isArray(filePart) ? filePart : [filePart];
+
+  for (const part of parts) {
+    if (part.text) {
+      content.push({ type: "text", text: part.text });
+    } else if (part.inlineData) {
+      content.push({
+        type: "image_url",
+        image_url: {
+          url: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`
+        }
+      });
+    }
+  }
+  return content;
+}
+
+/**
+ * Балансировщик скобок для исправления обрезанного JSON
+ */
+function repairJSON(text) {
+  let stack = [];
+  let isInsideString = false;
+  let escaped = false;
+
+  for (let i = 0; i < text.length; i++) {
+    let c = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (c === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (c === '"') {
+      isInsideString = !isInsideString;
+      continue;
+    }
+    if (!isInsideString) {
+      if (c === '{') stack.push('}');
+      else if (c === '[') stack.push(']');
+      else if (c === '}' || c === ']') {
+        if (stack.length > 0 && stack[stack.length - 1] === c) {
+          stack.pop();
+        }
       }
-    })
+    }
+  }
+
+  let repaired = text.trim();
+
+  // Если мы внутри строки, закрываем её
+  if (isInsideString) repaired += '"';
+
+  // Если текст заканчивается на двоеточие или запятую - это признак обрыва на ключе/значении
+  // Убираем их, чтобы JSON был валидным после закрытия скобок
+  repaired = repaired.replace(/[:,\s]+$/, "");
+
+  // Закрываем все открытые скобки
+  repaired += stack.reverse().join('');
+  return repaired;
+}
+
+/**
+ * Robust JSON extraction and parsing
+ */
+function safeParseJSON(text) {
+  if (!text) throw new Error("Получен пустой ответ от AI");
+
+  try {
+    return JSON.parse(text);
+  } catch (initialError) {
+    console.log("⚠️ Прямой парсинг не удался, пытаюсь очистить и починить JSON...");
+    let cleaned = text.trim();
+
+    // 1. Ищем ГРАНИЦЫ. Если JSON явно закончился (есть и { и }), 
+    // отрезаем всё лишнее снаружи. Это лечит "мусор в конце".
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      // ПРОВЕРКА: Если между скобками есть другие }, мы можем отрезать лишнее.
+      // Но если это просто оборванный JSON, то lastBrace - это просто последняя доступная скобка.
+      // Решение: сначала пробуем распарсить кусок ДО последней скобки.
+      const candidate = cleaned.substring(firstBrace, lastBrace + 1);
+      try {
+        return JSON.parse(candidate);
+      } catch (e) {
+        // Если не вышло, значит JSON внутри битый/оборванный. Идем к шагу 2.
+        cleaned = cleaned.substring(firstBrace);
+      }
+    } else if (firstBrace !== -1) {
+      cleaned = cleaned.substring(firstBrace);
+    }
+
+    // 2. Базовая чистка
+    cleaned = cleaned.replace(/\/\/.*$/gm, "");
+    cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, "");
+    cleaned = cleaned.replace(/,\s*([}\]])/g, "$1");
+    cleaned = cleaned.replace(/[\u0000-\u001F\u007F-\u009F]/g, "");
+
+    // 3. Достраиваем скобки
+    cleaned = repairJSON(cleaned);
+
+    try {
+      return JSON.parse(cleaned);
+    } catch (secondError) {
+      console.error("❌ Критическая ошибка JSON. Длина текста:", cleaned.length);
+      console.error("Текст (последние 100 симв):", cleaned.slice(-100));
+      throw new Error(`Ошибка парсинга JSON: ${secondError.message}. Попробуйте отправить файлы еще раз или по одному.`);
+    }
+  }
+}
+
+/**
+ * Агент для анализа ОДНОГО файла.
+ * ГИБРИД: Qwen для зрения, MiniMax для текста.
+ */
+async function analyzeFileAgent(filePart, fileName) {
+  const isVision = Array.isArray(filePart) ?
+    filePart.some(p => p.inlineData) :
+    (filePart && !!filePart.inlineData);
+
+  const promptText = `Анализируй файл "${fileName}".\n\n${FILE_AGENT_PROMPT}`;
+  const model = isVision ? MODEL_VISION : MODEL_TEXT;
+
+  console.log(`🤖 [${isVision ? 'Vision' : 'Text'}] Используем ${model} для: ${fileName}`);
+
+  const content = convertToOpenAIContent(filePart, promptText);
+
+  const body = JSON.stringify({
+    model: model,
+    messages: [{ role: "user", content: content }],
+    response_format: { type: "json_object" },
+    temperature: 0.1,
+    max_tokens: 8192
   });
 
-  const data = await response.json();
-  console.log('Gemini raw response:', data);
+  const data = await fetchWithRetry(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'HTTP-Referer': 'https://test-keden.kgd.gov.kz',
+      'X-Title': 'Keden AI Hybrid'
+    },
+    body: body
+  });
 
-  if (data.error) throw new Error('Gemini API Error: ' + data.error.message);
-  const resultText = data.candidates[0].content.parts[0].text;
-  return JSON.parse(resultText.replace(/```json/g, '').replace(/```/g, '').trim());
+  if (!data || !data.choices || !data.choices[0]) {
+    throw new Error('Некорректный ответ от API OpenRouter');
+  }
+
+  const resultText = data.choices[0].message.content;
+  const result = safeParseJSON(resultText);
+  result.filename = fileName;
+  return result;
+}
+
+/**
+ * Объединяет результаты агентов
+ */
+function mergeAgentResults(results) {
+  return mergeAgentResultsJS(results);
+}
+
+// Заглушки для legacy
+async function analyzeSingleFile(filePart) {
+  return await analyzeFileAgent(filePart, "legacy_file");
+}
+
+async function askGeminiComplex(inputParts) {
+  return await analyzeFileAgent(inputParts, "legacy_complex");
 }

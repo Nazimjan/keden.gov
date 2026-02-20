@@ -326,8 +326,70 @@
             }
         }
 
+        .doc-row {
+            transition: background 0.2s;
+        }
+
+        .doc-row:hover {
+            background: rgba(255, 255, 255, 0.05) !important;
+        }
+
+        .doc-type-select {
+            cursor: pointer;
+            background: rgba(15, 23, 42, 0.8);
+        }
+
         .hidden {
             display: none !important;
+        }
+
+        /* Validation UI Styles */
+        .validation-card {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 12px;
+            padding: 12px;
+            margin-bottom: 20px;
+            font-size: 11px;
+        }
+
+        .validation-card.warning {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .validation-title {
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .validation-item {
+            margin-bottom: 4px;
+            color: #fca5a5;
+        }
+
+        .validation-card.warning .validation-item {
+            color: #fcd34d;
+        }
+
+        .field-error {
+            border-color: #ef4444 !important;
+            box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.5);
+        }
+
+        .field-warning {
+            border-color: #f59e0b !important;
+            box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.5);
+        }
+
+        .error-hint {
+            color: #ef4444;
+            font-size: 9px;
+            margin-top: 2px;
+            display: block;
         }
     </style>
 </head>
@@ -351,6 +413,8 @@
                     </svg>
                     <div style="font-size: 13px;">Загрузите документы (PDF, Excel, Фото)</div>
                     <div style="font-size: 10px; color: #64748b; margin-top: 4px;">можно выбрать несколько файлов</div>
+                    <div style="font-size: 10px; color: #ef4444; margin-top: 8px; font-weight: 600;">⚠️ ИНВОЙСЫ — СТРОГО
+                        В EXCEL (.xlsx)</div>
                     <input type="file" id="fileInput" hidden multiple accept=".pdf,.xlsx,.docx,.txt,.png,.jpg,.jpeg">
                 </div>
 
@@ -360,25 +424,30 @@
                 <div id="mainActions">
                     <button class="btn" id="startBtn">ЗАПОЛНИТЬ ПИ</button>
                 </div>
-            </div>
 
-            <div id="previewArea" class="preview-panel">
-                <h2 style="font-size: 14px; margin-bottom: 10px; color: #a855f7;">Предпросмотр данных</h2>
-                <div id="previewContent"></div>
-                <button class="btn" id="confirmFillBtn" style="margin-top: 15px;">ПОДТВЕРДИТЬ И ЗАПОЛНИТЬ</button>
+                <div id="validationSummary" style="margin-top: 20px;"></div>
             </div>
         </div>
 
+        <div id="previewArea" class="preview-panel">
+            <h2 style="font-size: 14px; margin-bottom: 10px; color: #a855f7;">Предпросмотр данных</h2>
+            <div id="previewContent"></div>
+            <button class="btn" id="confirmFillBtn" style="margin-top: 15px;">ПОДТВЕРДИТЬ И ЗАПОЛНИТЬ</button>
+        </div>
+    </div>
 
-        <div class="loader" id="loader"></div>
-        <div class="status" id="statusMessage"></div>
+
+    <div class="loader" id="loader"></div>
+    <div class="status" id="statusMessage"></div>
     </div>
     <script src="lib/xlsx.full.min.js"></script>
     <script src="lib/pdf.min.js"></script>
     <script src="popup/ui.js"></script>
     <script src="popup/file_readers.js"></script>
+    <script src="popup/agent-prompts.js"></script>
     <script src="popup/gemini.js"></script>
     <script src="popup/tnved.js"></script>
+    <script src="popup/bin-checker.js"></script>
     <script src="popup/main.js"></script>
 </body>
 

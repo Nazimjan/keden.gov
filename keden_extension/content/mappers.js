@@ -1,14 +1,23 @@
 const VALID_ENTITY_TYPES = ["LEGAL", "NON_RESIDENT_LEGAL", "INDIVIDUAL", "NON_RESIDENT_PERSON", "ENTREPRENEUR", "NON_RESIDENT", "PERSON"];
 
-function normalizeEntityType(entityType) {
-    if (!entityType) return null;
+function normalizeEntityType(entityType, name = "") {
+    if (!entityType) return "LEGAL";
     const upper = entityType.toUpperCase().replace(/[^A-Z_]/g, '');
+    const upperName = (name || "").toUpperCase();
+
+    // ПЕРВООЧЕРЕДНАЯ ПРОВЕРКА НА НЕРЕЗИДЕНТА ПО ИМЕНИ
+    // Если в имени есть LTD, LLC, CORP, INC, PLC и т.д. - это скорее всего нерезидент
+    const foreignIndicators = ["LTD", "LLC", "CORP", "INC", "PLC", "GMBH", "SARL", "SPA", "SDN BHD", "CO., LTD", "PTE LTD"];
+    if (foreignIndicators.some(ind => upperName.includes(ind))) {
+        return "NON_RESIDENT_LEGAL";
+    }
+
     if (VALID_ENTITY_TYPES.includes(upper)) return upper;
     if (upper === "LEGAL_ENTITY" || upper === "LEGALENTITY") return "LEGAL";
     if (upper.includes("NON_RESIDENT") && upper.includes("LEGAL")) return "NON_RESIDENT_LEGAL";
     if (upper.includes("NON_RESIDENT") && upper.includes("PERSON")) return "NON_RESIDENT_PERSON";
     if (upper.includes("NON_RESIDENT")) return "NON_RESIDENT_LEGAL";
-    if (upper.includes("LEGAL") || upper.includes("COMPANY") || upper.includes("LLC") || upper.includes("LTD")) return "LEGAL";
+    if (upper.includes("LEGAL") || upper.includes("COMPANY")) return "LEGAL";
     if (upper.includes("INDIVIDUAL") || upper.includes("PERSON")) return "INDIVIDUAL";
     return "LEGAL";
 }
@@ -32,29 +41,61 @@ function buildCounteragentPayload(source, extra) {
     if (!source || !source.present) return null;
     const payload = {};
 
-    const entityType = normalizeEntityType(source.entityType);
+    const name = source.legal?.nameRu || source.nonResidentLegal?.nameRu || source.person?.lastName || "";
+    const entityType = normalizeEntityType(source.entityType, name);
     if (entityType) payload.entityType = entityType;
 
-    // Обработка адресов и кодов стран
+    // Ключевой идентификатор для ПИ (БИН или ИИН) - TЗ п.2.1
+    const rawBin = source.legal?.bin || source.person?.iin || source.iin || "";
+    if (rawBin) {
+        payload.xin = rawBin.toString().replace(/\D/g, '');
+    }
+
+    // Обработка адресов и кодов стран - TЗ п.2.2
     if (source.addresses) {
         payload.addresses = source.addresses.map(addr => {
-            const mappedAddr = { ...addr };
+            const mappedAddr = {
+                createdBy: null,
+                createdAt: null,
+                modifiedBy: null,
+                modifiedAt: null,
+                id: null,
+                targetId: null,
+                targetType: entityType && entityType.includes("PERSON") ? "PERSON" : "LEGAL",
+                addressType: addr.addressType || { id: 2014, code: "1", ru: "Адрес регистрации" },
+                ...addr
+            };
+
+            // Страна - TЗ п.2.2
             if (addr.countryCode && COUNTRY_MAP[addr.countryCode]) {
                 mappedAddr.country = COUNTRY_MAP[addr.countryCode];
                 delete mappedAddr.countryCode;
             } else if (addr.countryCode) {
-                // Фоллбек, если кода нет в мапе (используем CN как дефолт, но предупреждаем)
-                console.warn(`Unknown country code: ${addr.countryCode}, defaulting to China`);
                 mappedAddr.country = COUNTRY_MAP["CN"];
                 delete mappedAddr.countryCode;
+            } else if (extra?.type === 'DECLARANT') {
+                mappedAddr.country = COUNTRY_MAP["KZ"];
             }
 
-            // Для нерезидентов город/район ВСЕГДА в поле district и в ВЕРХНЕМ РЕГИСТРЕ
+            // Попытка разделить адрес на компоненты для Декларанта (резидента)
+            if (mappedAddr.fullAddress && !mappedAddr.street) {
+                const parts = mappedAddr.fullAddress.split(',').map(s => s.trim());
+                // Простая эвристика: последнее - дом/улица
+                if (parts.length >= 2) {
+                    mappedAddr.street = parts[parts.length - 2];
+                    mappedAddr.house = parts[parts.length - 1];
+                } else {
+                    mappedAddr.street = mappedAddr.fullAddress;
+                }
+            }
+
             if (entityType && entityType.includes("NON_RESIDENT")) {
                 const cityVal = addr.city || addr.district || "";
                 if (cityVal) {
-                    mappedAddr.district = cityVal.toUpperCase();
-                    delete mappedAddr.city;
+                    // ОБЯЗАТЕЛЬНО: Оставляем город в поле city для прохождения ФЛК
+                    mappedAddr.city = cityVal.toUpperCase();
+                    // Убираем поле района (district), оставляем только чистый город
+                    delete mappedAddr.district;
                 }
             }
 
@@ -72,20 +113,59 @@ function buildCounteragentPayload(source, extra) {
     }
 
     if (source.legal) {
-        payload.legal = { ...source.legal };
+        payload.legal = {
+            ...source.legal,
+            bin: source.legal.bin?.toString().replace(/\D/g, '') || ""
+        };
+        // Краткое наименование - TЗ п.2.1
+        if (!payload.legal.shortNameRu) {
+            payload.legal.shortNameRu = source.legal.shortNameRu || source.legal.nameRu?.substring(0, 50) || "";
+        }
         if (payload.legal.bin) {
-            payload.legal.bin = payload.legal.bin.toString().replace(/\D/g, '');
+            payload.xin = payload.legal.bin;
         }
     }
+
     if (source.nonResidentLegal) payload.nonResidentLegal = source.nonResidentLegal;
-    if (source.person) {
-        payload.person = { ...source.person };
+
+    if (source.person || (source.iin && source.lastName)) {
+        const p = source.person || source;
+        payload.person = {
+            iin: p.iin?.toString().replace(/\D/g, '') || "",
+            lastName: p.lastName || "",
+            firstName: p.firstName || "",
+            middleName: p.patronymic || p.middleName || ""
+        };
         if (payload.person.iin) {
-            payload.person.iin = payload.person.iin.toString().replace(/\D/g, '');
+            payload.xin = payload.person.iin;
         }
     }
+
     if (source.contacts !== undefined) payload.contacts = source.contacts;
     if (source.nonResidentPerson !== undefined) payload.nonResidentPerson = source.nonResidentPerson;
+
+    // Регистрационный документ - TЗ п.2.3
+    const regDoc = source.representativeCertificate || source.powerOfAttorney;
+    if (regDoc && regDoc.docNumber) {
+        const isPOA = source.powerOfAttorney !== undefined;
+        payload.registerDocument = {
+            docNumber: regDoc.docNumber,
+            docDate: regDoc.docDate || null,
+            startDate: regDoc.startDate || regDoc.docDate || null,
+            endDate: regDoc.endDate || null,
+            documentType: isPOA ? {
+                id: 432, // ID will be updated dynamically in main.js
+                code: "09024",
+                ru: "Документ, подтверждающий полномочия лица, подающего таможенную декларацию"
+            } : {
+                id: 415,
+                code: "09011",
+                ru: "Документ, свидетельствующий о включении лица в Реестр уполномоченных экономических операторов"
+            },
+            country: COUNTRY_MAP["KZ"],
+            regKindCode: regDoc.regKindCode || null
+        };
+    }
 
     return { ...payload, ...extra };
 }

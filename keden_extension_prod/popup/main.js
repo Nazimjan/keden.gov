@@ -22,6 +22,7 @@ document.getElementById('startBtn').onclick = async () => {
     try {
         const parts = [];
         let combinedText = "";
+        const binaryFiles = []; // Heavy files to process individually
 
         for (const file of files) {
             const fileName = file.name.toLowerCase();
@@ -33,8 +34,9 @@ document.getElementById('startBtn').onclick = async () => {
                     const text = await readPDF(file);
                     combinedText += `\n--- FILE: ${file.name} --- \n${text}\n`;
                 } catch (e) {
+                    // Scanned PDF — process individually later
                     const base64 = await fileToBase64(file);
-                    parts.push({ inlineData: { data: base64, mimeType: 'application/pdf' } });
+                    binaryFiles.push({ name: file.name, data: base64, mimeType: 'application/pdf' });
                 }
             } else if (fileName.endsWith('.xlsx')) {
                 const text = await readExcel(file);
@@ -47,11 +49,21 @@ document.getElementById('startBtn').onclick = async () => {
                     else if (fileName.endsWith('.webp')) mimeType = 'image/webp';
                     else mimeType = 'image/jpeg';
                 }
-                parts.push({ inlineData: { data: base64, mimeType: mimeType } });
+                // Image — process individually later
+                binaryFiles.push({ name: file.name, data: base64, mimeType: mimeType });
             } else {
                 const text = await file.text();
                 combinedText += `\n--- FILE: ${file.name} --- \n${text}\n`;
             }
+        }
+
+        // Binary files (images/scanned PDFs) are too heavy to send inline
+        // Just note them as text — the main analysis will work from text-extracted docs
+        for (const bf of binaryFiles) {
+            combinedText += `\n--- FILE: ${bf.name} (Скан/Фото — не анализируется, слишком большой) ---\n`;
+        }
+        if (binaryFiles.length > 0) {
+            console.warn(`⚠️ ${binaryFiles.length} binary file(s) skipped to stay within token limits`);
         }
 
         if (combinedText) {

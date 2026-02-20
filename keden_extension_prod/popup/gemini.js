@@ -1,5 +1,82 @@
 const GEMINI_API_KEY = 'AIzaSyBXIWN27uFhh5xKFHVwclFpkbE4ZDDc82M';
 
+// Retry configuration
+const MAX_RETRIES = 3;
+const BASE_DELAY_SECONDS = 30;
+const MAX_DELAY_SECONDS = 60;
+
+/**
+ * Extract retry delay from Gemini error message
+ * @param {string} errorMessage - The error message from Gemini API
+ * @returns {number} - Delay in seconds, or -1 if not found
+ */
+function extractRetryDelay(errorMessage) {
+  if (!errorMessage) return -1;
+  // Look for patterns like "retry in 31s" or "retry after 31 seconds"
+  const match = errorMessage.match(/retry\s+(?:in|after)\s+(\d+)\s*s/i);
+  if (match && match[1]) {
+    return parseInt(match[1], 10);
+  }
+  return -1;
+}
+
+/**
+ * Wait for specified seconds and update status
+ * @param {number} seconds - Seconds to wait
+ * @param {string} customMessage - Custom message to show
+ */
+async function waitWithCountdown(seconds, customMessage) {
+  for (let i = seconds; i > 0; i--) {
+    setStatus(`⏳ ${customMessage} ${i}s...`);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
+/**
+ * Make API request with retry logic for quota errors (429)
+ * @param {string} url - API URL
+ * @param {object} options - Fetch options
+ * @param {number} attempt - Current attempt number
+ * @returns {Promise<object>} - API response data
+ */
+async function fetchWithRetry(url, options, attempt = 1) {
+  const response = await fetch(url, options);
+  const data = await response.json();
+
+  // Check for quota error (429)
+  if (data.error && data.error.code === 429) {
+    const errorMessage = data.error.message || '';
+
+    // Try to extract retry delay from error message
+    let retryDelay = extractRetryDelay(errorMessage);
+
+    // If no delay found in message, use exponential backoff
+    if (retryDelay <= 0) {
+      retryDelay = Math.min(BASE_DELAY_SECONDS * Math.pow(2, attempt - 1), MAX_DELAY_SECONDS);
+    }
+
+    // Cap the delay to MAX_DELAY_SECONDS
+    retryDelay = Math.min(retryDelay, MAX_DELAY_SECONDS);
+
+    if (attempt >= MAX_RETRIES) {
+      throw new Error(`Квота исчерпана. Превышено максимальное количество попыток (${MAX_RETRIES}). Попробуйте позже.`);
+    }
+
+    console.log(`Quota exceeded (429). Attempt ${attempt}/${MAX_RETRIES}. Waiting ${retryDelay}s before retry...`);
+    await waitWithCountdown(retryDelay, `Квота исчерпана, повтор через`);
+
+    // Retry with increased attempt number
+    return fetchWithRetry(url, options, attempt + 1);
+  }
+
+  // Throw other errors
+  if (data.error) {
+    throw new Error('Gemini API Error: ' + data.error.message);
+  }
+
+  return data;
+}
+
 async function askGeminiComplex(inputParts) {
   console.log('Calling Gemini API (PI Fast Mode)...');
   setStatus('🤖 Gemini изучает документы...');
@@ -102,21 +179,22 @@ async function askGeminiComplex(inputParts) {
         `
   };
 
-  const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key=${GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [promptPart, ...inputParts] }],
-      generationConfig: {
-        responseMimeType: "application/json"
-      }
-    })
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  const body = JSON.stringify({
+    contents: [{ parts: [promptPart, ...inputParts] }],
+    generationConfig: {
+      responseMimeType: "application/json"
+    }
   });
 
-  const data = await response.json();
+  const data = await fetchWithRetry(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: body
+  });
+
   console.log('Gemini raw response:', data);
 
-  if (data.error) throw new Error('Gemini API Error: ' + data.error.message);
   const resultText = data.candidates[0].content.parts[0].text;
   return JSON.parse(resultText.replace(/```json/g, '').replace(/```/g, '').trim());
 }

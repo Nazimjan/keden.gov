@@ -1,5 +1,6 @@
 /**
  * KEDEN Extension - POPUP (Main Entry Point)
+ * Swarm Agent Architecture: 2-Phase Processing
  */
 
 document.getElementById('openTabBtn').onclick = () => {
@@ -20,50 +21,145 @@ document.getElementById('startBtn').onclick = async () => {
     showLoading(true);
 
     try {
-        const parts = [];
-        let combinedText = "";
+        // =====================================================
+        // ФАЗА 1: Подготовка файлов (последовательно, быстро)
+        // =====================================================
+        const fileJobs = [];
 
         for (const file of files) {
             const fileName = file.name.toLowerCase();
             const isImage = /\.(png|jpe?g|webp)$/.test(fileName);
-            setStatus(`⏳ Обработка ${file.name}...`);
+            const isExcel = /\.(xlsx|xls)$/.test(fileName);
+            let filePart = null;
+            let mimeType = file.type || 'application/octet-stream';
 
-            if (fileName.endsWith('.pdf')) {
-                try {
-                    const text = await readPDF(file);
-                    combinedText += `\n--- FILE: ${file.name} --- \n${text}\n`;
-                } catch (e) {
-                    const base64 = await fileToBase64(file);
-                    parts.push({ inlineData: { data: base64, mimeType: 'application/pdf' } });
+            try {
+                if (fileName.endsWith('.pdf')) {
+                    try {
+                        let text = await readPDF(file);
+                        // Если PDF цифровой (есть текст), используем текст - это быстрее и дешевле
+                        if (text.trim().length < 100) throw new Error('Scan detected');
+
+                        const MAX_CHARS = 30000;
+                        if (text.length > MAX_CHARS) {
+                            text = text.substring(0, MAX_CHARS) + '\n... [TRUNCATED]';
+                        }
+                        filePart = { text: `--- FILE: ${file.name} (PDF Content) ---\n${text}\n` };
+                    } catch (pdfErr) {
+                        console.log(`📎 ${file.name}: скан PDF, рендерим страницы как изображения...`);
+                        filePart = await renderPDFPagesAsImages(file, 5); // рендерим первые 5 страниц
+                    }
+                } else if (isExcel) {
+                    console.log(`📊 ${file.name}: Excel, отправляем в MiniMax...`);
+                    const text = await readExcel(file);
+                    if (!text || text.length < 10) {
+                        throw new Error("Файл Excel пустой или не читается");
+                    }
+                    filePart = { text: `--- FILE: ${file.name} (Excel Content) ---\n${text}\n` };
+                } else if (isImage) {
+                    console.log(`🖼️ ${file.name}: изображение, отправляем в Qwen 3.5...`);
+                    const base64 = await fileToOptimizedBase64(file);
+                    filePart = { inlineData: { data: base64, mimeType: 'image/jpeg' } };
+                } else {
+                    let text = await file.text();
+                    const MAX_CHARS = 30000;
+                    if (text.length > MAX_CHARS) {
+                        text = text.substring(0, MAX_CHARS) + '\n... [TRUNCATED]';
+                    }
+                    filePart = { text: `--- FILE: ${file.name} (Text Content) ---\n${text}\n` };
                 }
-            } else if (fileName.endsWith('.xlsx')) {
-                const text = await readExcel(file);
-                combinedText += `\n--- FILE: ${file.name} --- \n${text}\n`;
-            } else if (isImage) {
-                const base64 = await fileToBase64(file);
-                let mimeType = file.type;
-                if (!mimeType) {
-                    if (fileName.endsWith('.png')) mimeType = 'image/png';
-                    else if (fileName.endsWith('.webp')) mimeType = 'image/webp';
-                    else mimeType = 'image/jpeg';
-                }
-                parts.push({ inlineData: { data: base64, mimeType: mimeType } });
-            } else {
-                const text = await file.text();
-                combinedText += `\n--- FILE: ${file.name} --- \n${text}\n`;
+            } catch (prepErr) {
+                console.warn(`Ошибка подготовки ${file.name}:`, prepErr);
+                filePart = { text: `--- FILE: ${file.name} (Could not read) ---\n` };
+            }
+
+            fileJobs.push({ file, filePart, mimeType });
+        }
+
+        // =====================================================
+        // ФАЗА 2: Агенты работают с ограничением параллелизма (макс 3 одновременно)
+        // =====================================================
+        // --- ЗАПУСК АГЕНТОВ (РАБОЧИЙ ПУЛ) ---
+        const MAX_CONCURRENT = 15; // Максимальная скорость
+        setStatus(`🤖 ${files.length} файлов, обработка по ${MAX_CONCURRENT} параллельно...`);
+        let completed = 0;
+
+        const results = [];
+        const queue = [...fileJobs];
+
+        async function processJob(job) {
+            try {
+                const result = await analyzeFileAgent(job.filePart, job.file.name);
+                completed++;
+                setStatus(`🤖 Готово ${completed}/${files.length} файлов...`);
+                return { status: 'ok', result, job };
+            } catch (err) {
+                completed++;
+                console.warn(`Ошибка агента ${job.file.name}:`, err);
+                setStatus(`🤖 Готово ${completed}/${files.length} файлов...`);
+                return {
+                    status: 'error', job,
+                    result: {
+                        filename: job.file.name,
+                        error: err.message,
+                        document: { type: 'UNKNOWN', number: '', date: '' },
+                        counteragents: { consignor: { present: false }, consignee: { present: false }, carrier: { present: false } },
+                        products: [],
+                        vehicles: {},
+                        driver: { present: false }
+                    }
+                };
             }
         }
 
-        if (combinedText) {
-            parts.push({ text: combinedText });
+        // Пул воркеров: строго MAX_CONCURRENT одновременно
+        async function runPool() {
+            const workers = [];
+            for (let i = 0; i < MAX_CONCURRENT; i++) {
+                workers.push((async () => {
+                    while (queue.length > 0) {
+                        const job = queue.shift();
+                        if (!job) break;
+                        const res = await processJob(job);
+                        results.push(res);
+                    }
+                })());
+            }
+            await Promise.all(workers);
         }
+        await runPool();
 
-        setStatus('🤖 Gemini анализирует всё...');
-        const aiData = await askGeminiComplex(parts);
+        const settled = results;
+
+        const agentResults = settled.map(s => s.result);
+        const processedFiles = settled.map(s => {
+            const fp = s.job.filePart;
+            const base64 = fp.inlineData ? fp.inlineData.data :
+                btoa(unescape(encodeURIComponent(fp.text || '')));
+            return {
+                name: s.job.file.name,
+                base64: base64,
+                mimeType: s.job.mimeType,
+                isBinary: !!fp.inlineData
+            };
+        });
+
+        // Debug: показываем размер результатов
+        const resultsJson = JSON.stringify(agentResults);
+        console.log(`📊 Agent results size: ${resultsJson.length} chars (~${Math.round(resultsJson.length / 4)} tokens). Files: ${files.length}`);
+
+        // =====================================================
+        // ФАЗА 3: JS-мерж объединяет результаты (мгновенно)
+        // =====================================================
+        setStatus('🔧 Объединение результатов...');
+
+        const finalData = mergeAgentResults(agentResults);
+        finalData.rawFiles = processedFiles; // Attach raw files for later use
 
         showLoading(false);
-        renderPreview(aiData);
-        setStatus('✅ Анализ завершен. Проверьте данные ниже.');
+        // Pass everything to renderPreview (data + validation + documents list)
+        renderPreview(finalData);
+        setStatus('✅ Анализ завершен. Проверьте данные и ошибки ниже.');
 
     } catch (error) {
         console.error(error);
@@ -72,8 +168,31 @@ document.getElementById('startBtn').onclick = async () => {
     }
 };
 
+// Add listener to show file names when selected
+document.getElementById('fileInput').onchange = (e) => {
+    const fileList = document.getElementById('fileList');
+    fileList.innerHTML = '';
+    const files = Array.from(e.target.files);
+    if (files.length > 0) {
+        files.forEach(f => {
+            const div = document.createElement('div');
+            div.textContent = `📄 ${f.name}`;
+            fileList.appendChild(div);
+        });
+    }
+};
+
 document.getElementById('confirmFillBtn').onclick = async () => {
     logButtonClick('confirmFillBtn');
+
+    // Validation errors check removed as per user request to never block filling
+    /*
+    if (currentAIData && currentAIData.validation && currentAIData.validation.errors && currentAIData.validation.errors.length > 0) {
+        alert('Пожалуйста, исправьте ошибки перед заполнением. ' + currentAIData.validation.errors[0].message);
+        return;
+    }
+    */
+
     const scrapedData = scrapePreviewData();
     if (!scrapedData) return;
 

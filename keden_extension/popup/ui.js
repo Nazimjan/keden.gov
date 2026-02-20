@@ -69,9 +69,20 @@ if (dropZone && fileInput) {
 }
 
 let currentAIData = null;
+let registryDocumentFileBase64 = null;
+let registryDocumentMimeType = null;
+let registryDocumentFileName = null;
 
-function renderPreview(data) {
+function renderPreview(aiResponse) {
+    // Handle both old and new structures
+    const data = aiResponse.mergedData || aiResponse;
+    const validation = aiResponse.validation || { errors: [], warnings: [] };
+    const documents = aiResponse.documents || [];
+
     currentAIData = data;
+    currentAIData.documents = documents;
+    currentAIData.validation = validation;
+    currentAIData.rawFiles = aiResponse.rawFiles || [];
     const previewArea = document.getElementById('previewArea');
     const previewContent = document.getElementById('previewContent');
     const container = document.getElementById('mainContainer');
@@ -79,11 +90,144 @@ function renderPreview(data) {
     previewContent.innerHTML = '';
     if (container) container.classList.add('expanded');
 
-    // previewArea is already display:block via .expanded .preview-panel in CSS
-    // but we can ensure it here if needed, or just let CSS handle it.
-    // However, the original code had previewArea.style.display = 'block';
-    // Let's stick to adding classes for layout.
+    // 0. Render Validation Summary
+    renderValidationSummary(validation);
 
+    // 0.1 Render Editable Documents List (44 Graph)
+    const docSection = document.createElement('div');
+    docSection.className = 'preview-section';
+    docSection.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <h3 style="margin: 0;">📑 Документы (44 графа)</h3>
+            <button id="addDocBtn" style="background: var(--accent); border: none; border-radius: 4px; color: white; padding: 2px 8px; cursor: pointer; font-size: 14px;">+</button>
+            <input type="file" id="manualDocInput" hidden accept=".pdf,.png,.jpg,.jpeg">
+        </div>
+    `;
+
+    const tableContainer = document.createElement('div');
+    tableContainer.id = 'docsTableContainer';
+    tableContainer.style.fontSize = '11px';
+    tableContainer.innerHTML = `
+        <div style="display: grid; grid-template-columns: 1fr 130px 80px 80px 30px; gap: 4px; padding-bottom: 4px; color: #64748b; font-weight: 600;">
+            <div>Файл</div>
+            <div>Тип / Код</div>
+            <div>Номер</div>
+            <div>Дата</div>
+            <div></div>
+        </div>
+        <div id="docsRowsList"></div>
+    `;
+    docSection.appendChild(tableContainer);
+    previewContent.appendChild(docSection);
+
+    const rowsList = tableContainer.querySelector('#docsRowsList');
+
+    function addDocRow(doc, idx) {
+        const row = document.createElement('div');
+        row.className = 'doc-row';
+        row.style.display = 'grid';
+        row.style.gridTemplateColumns = '1fr 130px 80px 80px 30px';
+        row.style.gap = '4px';
+        row.style.marginBottom = '4px';
+        row.style.padding = '4px';
+        row.style.background = 'rgba(255,255,255,0.02)';
+        row.style.borderRadius = '4px';
+        row.dataset.filename = doc.filename;
+
+        const typeOptions = [
+            { val: '04021', label: 'Инвойс (04021)' },
+            { val: '02015', label: 'CMR (02015)' },
+            { val: '09011', label: 'Реестр (09011)' },
+            { val: '11005', label: 'ТТН / Иные (11005)' },
+            { val: '04131', label: 'Упаков. лист (04131)' },
+            { val: '10022', label: 'Допущение ТС (10022)' },
+            { val: '09024', label: 'Доверенность (09024)' },
+            { val: '00000', label: 'Другое' }
+        ];
+
+        const typeToCode = {
+            'INVOICE': '04021',
+            'TRANSPORT_DOC': '02015',
+            'REGISTRY': '09011',
+            'POWER_OF_ATTORNEY': '09024',
+            'OTHER': '11005'
+        };
+        const currentCode = typeToCode[doc.type] || doc.type || '00000';
+
+        const optionsHtml = typeOptions.map(opt =>
+            `<option value="${opt.val}" ${currentCode === opt.val ? 'selected' : ''}>${opt.label}</option>`
+        ).join('');
+
+        row.innerHTML = `
+            <div style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${doc.filename}">${doc.filename}</div>
+            <select class="preview-input doc-type-select" style="padding: 2px;">${optionsHtml}</select>
+            <input type="text" class="preview-input doc-num-input" value="${doc.number || ''}" placeholder="б/н">
+            <input type="text" class="preview-input doc-date-input" value="${doc.date || ''}" placeholder="ДД.ММ.ГГГГ">
+            <button class="delete-doc-btn" style="background:none; border:none; color:#ef4444; cursor:pointer; font-size:16px; padding:0;">×</button>
+        `;
+
+        row.querySelector('.delete-doc-btn').onclick = () => {
+            row.remove();
+        };
+
+        rowsList.appendChild(row);
+    }
+
+    documents.forEach((doc, i) => addDocRow(doc, i));
+
+    // Handle Manual Add
+    const addDocBtn = docSection.querySelector('#addDocBtn');
+    const manualDocInput = docSection.querySelector('#manualDocInput');
+
+    addDocBtn.onclick = () => manualDocInput.click();
+
+    manualDocInput.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        setStatus(`⌛ Анализ нового файла: ${file.name}...`);
+        try {
+            const base64 = await fileToBase64(file);
+            let filePart;
+            if (file.name.toLowerCase().endsWith('.pdf')) {
+                try {
+                    const text = await readPDF(file);
+                    filePart = { text: `--- FILE: ${file.name} (PDF Content) --- \n${text}\n` };
+                } catch (err) {
+                    filePart = { inlineData: { data: base64, mimeType: 'application/pdf' } };
+                }
+            } else {
+                filePart = { inlineData: { data: base64, mimeType: file.type || 'image/jpeg' } };
+            }
+
+            const result = await analyzeSingleFile(filePart);
+
+            const newDoc = {
+                filename: file.name,
+                type: result.type,
+                number: result.number,
+                date: result.date
+            };
+
+            // Add to current data
+            const newIdx = currentAIData.documents.length;
+            currentAIData.documents.push(newDoc);
+
+            // Add raw file for upload
+            currentAIData.rawFiles.push({
+                name: file.name,
+                base64: base64,
+                mimeType: file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
+                isBinary: true
+            });
+
+            addDocRow(newDoc, newIdx);
+            setStatus(`✅ Файл ${file.name} добавлен и распознан.`);
+        } catch (err) {
+            console.error(err);
+            setStatus(`❌ Ошибка анализа файла: ${err.message}`);
+        }
+    };
 
     // 1. Vehicles Section
     if (data.vehicles) {
@@ -135,24 +279,77 @@ function renderPreview(data) {
         section.innerHTML = `<h3>Контрагенты</h3>`;
 
         const agents = [
+            { id: 'consignor', label: 'Отправитель (Имя)', data: ca.consignor },
             { id: 'consignee', label: 'Получатель (БИН/ИИН)', data: ca.consignee },
             { id: 'carrier', label: 'Перевозчик (БИН/ИИН)', data: ca.carrier },
-            { id: 'declarant', label: 'Декларант (БИН/ИИН)', data: ca.declarant }
+            { id: 'declarant', label: 'Декларант (БИН/ИИН)', data: ca.declarant },
+            { id: 'filler', label: 'Заполнитель (БИН/ИИН)', data: ca.filler }
         ];
 
         agents.forEach(agent => {
-            if (agent.data) {
-                const bin = agent.data.legal?.bin || agent.data.person?.iin || '';
-                const name = agent.data.legal?.nameRu || agent.data.nonResidentLegal?.nameRu || agent.data.person?.lastName || '';
+            if (agent.data && (agent.data.present !== false)) {
+                const bin = agent.id === 'filler' ? (agent.data.iin || '') : (agent.data.legal?.bin || agent.data.person?.iin || '');
+                const name = agent.id === 'filler' ? (agent.data.lastName || '') : (agent.data.legal?.nameRu || agent.data.nonResidentLegal?.nameRu || agent.data.person?.lastName || '');
+                const addrObj = agent.data.addresses?.[0] || {};
+                let address = addrObj.fullAddress || '';
+                if (!address && (addrObj.city || addrObj.street)) {
+                    address = [addrObj.region, addrObj.city, addrObj.district, addrObj.street, addrObj.house]
+                        .filter(Boolean).join(', ');
+                }
+                if (!address) address = addrObj.district || '';
                 const div = document.createElement('div');
                 div.style.marginBottom = '8px';
                 div.innerHTML = `
                     <label style="font-size: 10px; color: #64748b; display: block; margin-bottom: 2px;">${agent.label}</label>
-                    <div style="display: flex; gap: 8px; align-items: center;">
-                        <input type="text" class="preview-input" id="prev-agent-bin-${agent.id}" value="${bin}" placeholder="БИН/ИИН" style="width: 130px; flex-shrink: 0;">
-                        <input type="text" class="preview-input" id="prev-agent-name-${agent.id}" value="${name}" placeholder="Название" style="flex: 1;">
+                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                        <div style="display: flex; gap: 8px; align-items: center;">
+                            <input type="text" class="preview-input" id="prev-agent-bin-${agent.id}" value="${bin}" placeholder="БИН/ИИН" style="${agent.id === 'consignor' ? 'display:none;' : 'width: 130px; flex-shrink: 0;'}">
+                            <input type="text" class="preview-input" id="prev-agent-name-${agent.id}" value="${name}" placeholder="Название" style="flex: 1;">
+                            ${agent.id === 'declarant' ? `<input type="text" class="preview-input" id="prev-agent-shortname-declarant" value="${agent.data.legal?.shortNameRu || ''}" placeholder="Краткое наим." style="flex: 1;">` : ''}
+                        </div>
+                        <input type="text" class="preview-input" id="prev-agent-address-${agent.id}" value="${address}" placeholder="Адрес (город, улица, дом)" style="width: 100%;">
                     </div>
                 `;
+
+                // Specific for Declarant: Representative Certificate
+                if (agent.id === 'declarant') {
+                    const cert = agent.data.representativeCertificate || {};
+                    const certHtml = `
+                        <div style="margin-top: 4px; padding: 4px; background: rgba(148, 163, 184, 0.05); border-radius: 4px; border: 1px dashed #475569;">
+                            <label style="font-size: 9px; color: #64748b; display: block;">Свидетельство представителя</label>
+                            <div style="display: flex; gap: 4px;">
+                                <input type="text" class="preview-input" id="prev-agent-cert-num" value="${cert.docNumber || ''}" placeholder="№ Свидетельства" style="flex: 2;">
+                                <input type="text" class="preview-input" id="prev-agent-cert-date" value="${cert.docDate || ''}" placeholder="Дата" style="flex: 1;">
+                            </div>
+                        </div>
+                    `;
+                    div.insertAdjacentHTML('beforeend', certHtml);
+                }
+
+                // Specific for Filler: Full Name and Power of Attorney
+                if (agent.id === 'filler') {
+                    const f = agent.data;
+                    const poa = f.powerOfAttorney || {};
+                    const fillerHtml = `
+                        <div style="display: flex; gap: 4px; margin-top: 4px;">
+                            <input type="text" class="preview-input" id="prev-filler-firstName" value="${f.firstName || ''}" placeholder="Имя" style="flex: 1;">
+                            <input type="text" class="preview-input" id="prev-filler-patronymic" value="${f.patronymic || ''}" placeholder="Отчество" style="flex: 1;">
+                        </div>
+                        <div style="margin-top: 4px; padding: 4px; background: rgba(148, 163, 184, 0.05); border-radius: 4px; border: 1px dashed #475569;">
+                            <label style="font-size: 9px; color: #64748b; display: block;">Доверенность (11004)</label>
+                            <div style="display: flex; gap: 4px; margin-bottom: 4px;">
+                                <input type="text" class="preview-input" id="prev-filler-poa-num" value="${poa.docNumber || ''}" placeholder="№ Доверенности" style="flex: 1;">
+                                <input type="text" class="preview-input" id="prev-filler-poa-date" value="${poa.docDate || ''}" placeholder="Дата" style="flex: 1;">
+                            </div>
+                            <div style="display: flex; gap: 4px;">
+                                <input type="text" class="preview-input" id="prev-filler-poa-start" value="${poa.startDate || poa.docDate || ''}" placeholder="С даты" style="flex: 1;">
+                                <input type="text" class="preview-input" id="prev-filler-poa-end" value="${poa.endDate || ''}" placeholder="По дату" style="flex: 1;">
+                            </div>
+                        </div>
+                    `;
+                    div.insertAdjacentHTML('beforeend', fillerHtml);
+                }
+
                 section.appendChild(div);
             }
         });
@@ -165,14 +362,19 @@ function renderPreview(data) {
         section.className = 'preview-section';
         section.innerHTML = `
             <h3>Водитель</h3>
-            <div class="preview-row">
-                <span class="preview-label">ИИН:</span>
-                <input type="text" class="preview-input" id="prev-driver-iin" value="${data.driver.iin || ''}" placeholder="ИИН">
+            <div class="row" style="margin-bottom: 4px;">
+                <div style="flex: 1;">
+                    <label style="font-size: 10px; color: #64748b;">ИИН Водителя</label>
+                    <input type="text" class="preview-input" id="prev-driver-iin" value="${data.driver.iin || ''}" placeholder="ИИН">
+                </div>
             </div>
-            <div class="preview-row">
-                <span class="preview-label">ФИО:</span>
-                <div style="display: flex; gap: 4px;">
+            <div class="row" style="gap: 4px;">
+                <div style="flex: 1;">
+                    <label style="font-size: 10px; color: #64748b;">Фамилия</label>
                     <input type="text" class="preview-input" id="prev-driver-lastName" value="${data.driver.lastName || ''}" placeholder="Фамилия">
+                </div>
+                <div style="flex: 1;">
+                    <label style="font-size: 10px; color: #64748b;">Имя</label>
                     <input type="text" class="preview-input" id="prev-driver-firstName" value="${data.driver.firstName || ''}" placeholder="Имя">
                 </div>
             </div>
@@ -204,9 +406,12 @@ function renderPreview(data) {
         const tbody = section.querySelector('#prev-products-body');
         data.products.forEach((p, i) => {
             const tr = document.createElement('tr');
+            const hasCyrillic = /[а-яА-ЯёЁ]/.test(p.commercialName || '');
+            const nameBg = hasCyrillic ? '' : 'background: rgba(239, 68, 68, 0.2); border-color: #ef4444;';
+
             tr.innerHTML = `
                 <td><input type="text" class="preview-input prev-prod-tnved" value="${p.tnvedCode || ''}" data-index="${i}"></td>
-                <td><input type="text" class="preview-input prev-prod-name" value="${p.commercialName || ''}" data-index="${i}"></td>
+                <td><input type="text" class="preview-input prev-prod-name" value="${p.commercialName || ''}" data-index="${i}" style="${nameBg}"></td>
                 <td><input type="number" class="preview-input prev-prod-weight" value="${p.grossWeight || ''}" data-index="${i}" style="text-align: center;"></td>
                 <td><input type="number" class="preview-input prev-prod-qty" value="${p.quantity || ''}" data-index="${i}" style="text-align: center;"></td>
                 <td><input type="number" class="preview-input prev-prod-cost" value="${p.cost || ''}" data-index="${i}" style="text-align: center;"></td>
@@ -215,63 +420,115 @@ function renderPreview(data) {
             tbody.appendChild(tr);
         });
 
-        // Add Totals Footer
-        const totalsDiv = document.createElement('div');
-        totalsDiv.id = 'preview-totals';
-        totalsDiv.style.cssText = 'margin-top: 10px; padding: 10px; background: rgba(168, 85, 247, 0.1); border-radius: 8px; border: 1px solid rgba(168, 85, 247, 0.2); font-size: 12px; display: flex; gap: 20px;';
-        previewContent.appendChild(totalsDiv);
+        // Totals update logic (simplified helper)
+        const updateTotalsFull = () => {
+            let totalWeight = 0; let totalQty = 0; let totalCost = 0;
+            section.querySelectorAll('.prev-prod-weight').forEach(el => totalWeight += parseFloat(el.value || 0));
+            section.querySelectorAll('.prev-prod-qty').forEach(el => totalQty += parseFloat(el.value || 0));
+            section.querySelectorAll('.prev-prod-cost').forEach(el => totalCost += parseFloat(el.value || 0));
+            const curr = section.querySelector('.prev-prod-curr')?.value || 'USD';
 
-        function updateTotals() {
-            let totalWeight = 0;
-            let totalQty = 0;
-            let totalCost = 0;
-
-            document.querySelectorAll('.prev-prod-weight').forEach(el => totalWeight += parseFloat(el.value || 0));
-            document.querySelectorAll('.prev-prod-qty').forEach(el => totalQty += parseFloat(el.value || 0));
-            document.querySelectorAll('.prev-prod-cost').forEach(el => totalCost += parseFloat(el.value || 0));
-
-            const curr = document.querySelector('.prev-prod-curr')?.value || 'USD';
-
-            totalsDiv.innerHTML = `
-                <div><strong>Итого вес:</strong> ${totalWeight.toFixed(2)} кг</div>
-                <div><strong>Итого мест:</strong> ${totalQty}</div>
-                <div><strong>Итого сумма:</strong> ${totalCost.toFixed(2)} ${curr}</div>
+            let totalsEl = section.querySelector('.preview-totals-auto');
+            if (!totalsEl) {
+                totalsEl = document.createElement('div');
+                totalsEl.className = 'preview-totals-auto';
+                totalsEl.style.cssText = 'margin-top: 10px; padding: 10px; background: rgba(168, 85, 247, 0.1); border-radius: 8px; font-size: 11px; display: flex; gap: 15px;';
+                section.appendChild(totalsEl);
+            }
+            totalsEl.innerHTML = `
+                <div><strong>Позиций:</strong> ${section.querySelectorAll('.prev-prod-weight').length}</div>
+                <div><strong>Вес:</strong> ${totalWeight.toFixed(2)}кг</div>
+                <div><strong>Мест:</strong> ${totalQty}</div>
+                <div><strong>Сумма:</strong> ${totalCost.toFixed(2)} ${curr}</div>
             `;
+        };
+        updateTotalsFull();
+        section.addEventListener('input', updateTotalsFull);
+    }
+
+    // 4. Registry Section - REMOVED (Redundant, handled in Documents list)
+
+    // After rendering everything, highlight fields based on validation
+    highlightFieldsUI(validation);
+
+    // Automated TNVED Validation
+    validateAllVisibleTNVEDInputs();
+
+    // Re-validate TNVED on manual edits
+    document.querySelectorAll('.prev-prod-tnved').forEach(input => {
+        input.addEventListener('change', async () => {
+            setTNVEDValidationStatus(input, 'loading');
+            const result = await validateTNVEDCode(input.value.trim());
+            setTNVEDValidationStatus(input, result.valid ? 'valid' : 'invalid');
+        });
+    });
+
+    // Automated BIN/IIN Enrichment (uchet.kz)
+    const agentsToCheck = ['consignee', 'carrier', 'declarant'];
+    agentsToCheck.forEach(type => {
+        const binInput = document.getElementById(`prev-agent-bin-${type}`);
+        const binValue = binInput ? binInput.value.trim() : '';
+        if (binValue && binValue.length === 12) {
+            enrichFieldByBIN(binValue, type);
         }
 
-        // Add listeners for real-time recalculation
-        section.addEventListener('input', (e) => {
-            if (e.target.classList.contains('preview-input')) {
-                updateTotals();
-            }
-        });
-
-        updateTotals();
-
-        // Trigger TNVED validation after rendering products
-        if (typeof validateAllVisibleTNVEDInputs === 'function') {
-            // Add a small status indicator for validation progress
-            const validationStatus = document.createElement('div');
-            validationStatus.id = 'tnved-validation-status';
-            validationStatus.style.cssText = 'margin-top: 8px; font-size: 11px; color: #94a3b8;';
-            validationStatus.innerHTML = '🔄 Проверка кодов ТН ВЭД...';
-            section.appendChild(validationStatus);
-
-            validateAllVisibleTNVEDInputs().then(() => {
-                const validCount = document.querySelectorAll('.prev-prod-tnved.tnved-valid').length;
-                const invalidCount = document.querySelectorAll('.prev-prod-tnved.tnved-invalid').length;
-                const total = validCount + invalidCount;
-
-                if (invalidCount === 0) {
-                    validationStatus.innerHTML = `✅ Анализ завершен. Проверьте данные ниже.`;
-                    validationStatus.style.color = '#22c55e';
-                } else {
-                    validationStatus.innerHTML = `⚠️ Найдено ${invalidCount} из ${total} кодов с ошибками`;
-                    validationStatus.style.color = '#ef4444';
+        // Also listen for manual changes
+        if (binInput) {
+            binInput.addEventListener('change', () => {
+                const newBin = binInput.value.trim();
+                if (newBin.length === 12) {
+                    enrichFieldByBIN(newBin, type);
                 }
             });
         }
+    });
+}
+
+function renderValidationSummary(validation) {
+    const summaryEl = document.getElementById('validationSummary');
+    if (!summaryEl) return;
+    summaryEl.innerHTML = `<h3 style="margin-top:0;">🛡️ Отчет о кросс-валидации</h3>`;
+
+    if (validation.errors.length === 0 && validation.warnings.length === 0) {
+        summaryEl.innerHTML += '<div class="validation-item success">✅ Данные во всех документах совпадают. Противоречий не обнаружено.</div>';
+        return;
     }
+
+    validation.errors.forEach(err => {
+        const div = document.createElement('div');
+        div.className = 'validation-item error';
+        div.innerHTML = `<strong>Ошибка:</strong> ${err.message}`;
+        summaryEl.appendChild(div);
+    });
+
+    validation.warnings.forEach(warn => {
+        const div = document.createElement('div');
+        div.className = 'validation-item warning';
+        div.innerHTML = `<strong>Внимание:</strong> ${warn.message}`;
+        summaryEl.appendChild(div);
+    });
+}
+
+function highlightFieldsUI(validation) {
+    const map = {
+        'consignor.name': 'prev-agent-name-consignor',
+        'consignee.bin': 'prev-agent-bin-consignee',
+        'consignee.name': 'prev-agent-name-consignee',
+        'vehicle.tractor': 'prev-tractor-num',
+        'vehicle.trailer': 'prev-trailer-num',
+        'weight.brutto': 'prev-products-body'
+    };
+
+    [...validation.errors, ...validation.warnings].forEach(v => {
+        const id = map[v.field];
+        if (id) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.classList.add(v.severity === 'ERROR' ? 'error-field' : 'warning-field');
+                el.title = v.message;
+            }
+        }
+    });
 }
 
 function scrapePreviewData() {
@@ -294,14 +551,82 @@ function scrapePreviewData() {
         newData.countries.destinationCountry = destInput?.value || "";
     }
 
-    // Scrape Counteragents ... (no changes needed)
-    const agents = ['consignee', 'carrier', 'declarant'];
-    agents.forEach(id => {
+    // Scrape Counteragents
+    const agentIds = ['consignor', 'consignee', 'carrier', 'declarant', 'filler'];
+    agentIds.forEach(id => {
         const binInput = document.getElementById(`prev-agent-bin-${id}`);
-        if (binInput && newData.counteragents[id]) {
-            const bin = binInput.value;
-            if (newData.counteragents[id].legal) newData.counteragents[id].legal.bin = bin;
-            else if (newData.counteragents[id].person) newData.counteragents[id].person.iin = bin;
+        const nameInput = document.getElementById(`prev-agent-name-${id}`);
+
+        if (newData.counteragents[id]) {
+            const binInput = document.getElementById(`prev-agent-bin-${id}`);
+            const nameInput = document.getElementById(`prev-agent-name-${id}`);
+            const addrInput = document.getElementById(`prev-agent-address-${id}`);
+
+            if (binInput) {
+                const bin = binInput.value;
+                if (bin) {
+                    if (!newData.counteragents[id].legal && !newData.counteragents[id].person && id !== 'consignor') {
+                        newData.counteragents[id].legal = { bin: bin };
+                        newData.counteragents[id].entityType = "LEGAL";
+                    } else if (newData.counteragents[id].legal) {
+                        newData.counteragents[id].legal.bin = bin;
+                    } else if (newData.counteragents[id].person) {
+                        newData.counteragents[id].person.iin = bin;
+                    }
+                }
+            }
+            if (nameInput) {
+                const name = nameInput.value;
+                if (newData.counteragents[id].legal) {
+                    newData.counteragents[id].legal.nameRu = name;
+                    if (id === 'declarant') {
+                        const shortInput = document.getElementById('prev-agent-shortname-declarant');
+                        if (shortInput) newData.counteragents[id].legal.shortNameRu = shortInput.value;
+                    }
+                }
+                else if (newData.counteragents[id].nonResidentLegal) newData.counteragents[id].nonResidentLegal.nameRu = name;
+                else if (newData.counteragents[id].person) newData.counteragents[id].person.lastName = name;
+            }
+            if (addrInput) {
+                const currentVal = addrInput.value;
+                if (!newData.counteragents[id].addresses) newData.counteragents[id].addresses = [];
+                if (newData.counteragents[id].addresses.length === 0) {
+                    newData.counteragents[id].addresses.push({ addressType: { id: 2014, code: "1", ru: "Адрес регистрации" }, fullAddress: currentVal });
+                } else {
+                    // Update the string but keep other fields if they were enriched
+                    newData.counteragents[id].addresses[0].fullAddress = currentVal;
+                }
+            }
+
+            // Declarant certificate
+            if (id === 'declarant') {
+                const numInput = document.getElementById('prev-agent-cert-num');
+                const dateInput = document.getElementById('prev-agent-cert-date');
+                if (numInput || dateInput) {
+                    if (!newData.counteragents[id].representativeCertificate) {
+                        newData.counteragents[id].representativeCertificate = {};
+                    }
+                    newData.counteragents[id].representativeCertificate.docNumber = numInput?.value || "";
+                    newData.counteragents[id].representativeCertificate.docDate = dateInput?.value || "";
+                }
+            }
+
+            // Filler specifics
+            if (id === 'filler') {
+                const f = newData.counteragents[id];
+                if (f) {
+                    f.iin = document.getElementById(`prev-agent-bin-filler`)?.value || "";
+                    f.lastName = document.getElementById(`prev-agent-name-filler`)?.value || "";
+                    f.firstName = document.getElementById('prev-filler-firstName')?.value || "";
+                    f.patronymic = document.getElementById('prev-filler-patronymic')?.value || "";
+
+                    if (!f.powerOfAttorney) f.powerOfAttorney = { typeCode: "11004" };
+                    f.powerOfAttorney.docNumber = document.getElementById('prev-filler-poa-num')?.value || "";
+                    f.powerOfAttorney.docDate = document.getElementById('prev-filler-poa-date')?.value || "";
+                    f.powerOfAttorney.startDate = document.getElementById('prev-filler-poa-start')?.value || "";
+                    f.powerOfAttorney.endDate = document.getElementById('prev-filler-poa-end')?.value || "";
+                }
+            }
         }
     });
 
@@ -331,12 +656,40 @@ function scrapePreviewData() {
         if (newData.products[index]) {
             newData.products[index].tnvedCode = input.value;
             newData.products[index].commercialName = prodNames[i].value;
-            newData.products[index].grossWeight = prodWeights[i].value;
-            newData.products[index].quantity = prodQtys[i].value;
-            newData.products[index].cost = prodCosts[i].value;
+            newData.products[index].grossWeight = parseFloat(prodWeights[i].value || 0);
+            newData.products[index].quantity = parseFloat(prodQtys[i].value || 0);
+            newData.products[index].cost = parseFloat(prodCosts[i].value || 0);
             newData.products[index].currencyCode = prodCurrs[i].value;
         }
     });
 
+    // Scrape Documents (44 Graph)
+    const docRows = document.querySelectorAll('.doc-row');
+    const updatedDocuments = [];
+    const activeFilenames = new Set();
+
+    docRows.forEach(row => {
+        const typeSelect = row.querySelector('.doc-type-select');
+        const numInput = row.querySelector('.doc-num-input');
+        const dateInput = row.querySelector('.doc-date-input');
+        const filename = row.dataset.filename;
+
+        activeFilenames.add(filename);
+        updatedDocuments.push({
+            filename: filename,
+            type: typeSelect.value,
+            number: numInput.value,
+            date: dateInput.value
+        });
+    });
+
+    newData.documents = updatedDocuments;
+
+    // Filter rawFiles to only include those still in the documents list
+    if (newData.rawFiles) {
+        newData.rawFiles = newData.rawFiles.filter(f => activeFilenames.has(f.name));
+    }
+
+    // Registry scraping moved to documents list above
     return newData;
 }

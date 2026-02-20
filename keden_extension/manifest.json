@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "Keden PI Autofill Premium",
     "version": "1.0",
-    "description": "AI-powered PI declaration filler using Gemini",
+    "description": "AI-powered PI declaration filler using Qwen 3.5 & MiniMax",
     "permissions": [
         "storage",
         "activeTab",
@@ -10,7 +10,8 @@
     ],
     "host_permissions": [
         "https://test-keden.kgd.gov.kz/*",
-        "https://generativelanguage.googleapis.com/*"
+        "https://pk.uchet.kz/*",
+        "https://openrouter.ai/*"
     ],
     "action": {
         "default_popup": "popup.html",
