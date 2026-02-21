@@ -119,9 +119,14 @@ function repairJSON(text) {
   // Если мы внутри строки, закрываем её
   if (isInsideString) repaired += '"';
 
-  // Если текст заканчивается на двоеточие или запятую - это признак обрыва на ключе/значении
   // Убираем их, чтобы JSON был валидным после закрытия скобок
   repaired = repaired.replace(/[:,\s]+$/, "");
+
+  // Удаляем "висячий" ключ без значения, который мог остаться в конце (например, `,"date"`)
+  repaired = repaired.replace(/(?:[{,])\s*"[^"]*"?\s*$/, function (match) {
+    if (match.trim().startsWith('{')) return '{';
+    return '';
+  });
 
   // Закрываем все открытые скобки
   repaired += stack.reverse().join('');
@@ -225,6 +230,112 @@ async function analyzeFileAgent(filePart, fileName) {
 }
 
 /**
+ * Агент для ПАКЕТНОЙ обработки всех загруженных файлов разом.
+ * Экономит токены на промпте и сразу делает кросс-валидацию силами ИИ.
+ */
+async function analyzeAllFilesAgent(fileParts, fileNames) {
+  // Определяем, есть ли картинки среди всех частей
+  const hasVision = fileParts.some(p =>
+    Array.isArray(p) ? p.some(x => x.inlineData) : !!p.inlineData
+  );
+
+  const model = hasVision ? MODEL_VISION : MODEL_TEXT;
+  console.log(`🤖 [Batch] Используем ${model} для ${fileParts.length} файлов:`, fileNames);
+
+  const prefixPrompt = `
+Ты — главный таможенный AI-эксперт. Тебе на вход передано СРАЗУ НЕСКОЛЬКО файлов (сканы, PDF, таблицы) по одной поставке: ${fileNames.join(", ")}.
+
+ТВОЯ ЗАДАЧА СДЕЛАТЬ КРОСС-СВЕРКУ (MERGE) ВСЕХ ДАННЫХ В ЕДИНУЮ ЗАПОЛНЕННУЮ ДЕКЛАРАЦИЮ.
+
+ПРАВИЛА КРОСС-СВЕРКИ:
+1. Если в разных документах (например, CMR и Инвойс) данные отличаются, выбери наиболее полные и точные.
+2. Для Товаров: возьми товары из Excel-инвойса или Упаковочного листа/Реестра. НЕ дублируй одинаковые списки из разных файлов.
+3. Формируй ЕДИНЫЙ итоговый JSON, который описывает всю эту поставку целиком.
+
+Базовые правила заполнения полей:
+`;
+
+  const promptText = prefixPrompt + FILE_AGENT_PROMPT;
+
+  // fileParts contains array of {text: ...} or {inlineData: ...}. We flatten them.
+  const flatParts = [];
+  fileParts.forEach(p => {
+    if (Array.isArray(p)) flatParts.push(...p);
+    else flatParts.push(p);
+  });
+
+  const content = convertToOpenAIContent(flatParts, promptText);
+
+  const body = JSON.stringify({
+    model: model,
+    messages: [{ role: "user", content: content }],
+    response_format: { type: "json_object" },
+    temperature: 0.1,
+    max_tokens: 8192
+  });
+
+  const data = await fetchWithRetry(OPENROUTER_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+      'HTTP-Referer': 'https://test-keden.kgd.gov.kz',
+      'X-Title': 'Keden AI Batch'
+    },
+    body: body
+  });
+
+  if (!data || !data.choices || !data.choices[0]) {
+    throw new Error('Некорректный ответ от API OpenRouter');
+  }
+
+  const resultText = data.choices[0].message.content;
+  const result = safeParseJSON(resultText);
+
+  // Теперь ИИ возвращает массив documents
+  let docTypesFound = [];
+
+  if (result.documents && Array.isArray(result.documents)) {
+    docTypesFound = result.documents.map(d => ({
+      filename: d.filename || d.name || "Объединенные данные",
+      type: d.type || 'OTHER',
+      number: d.number || '',
+      date: d.date || ''
+    }));
+  }
+
+  // Дополнительная валидация на случай, если ИИ по привычке вернет document
+  if (docTypesFound.length === 0 && result.document && result.document.type) {
+    docTypesFound.push({
+      filename: result.document.filename || "Объединенные данные",
+      type: result.document.type || 'OTHER',
+      number: result.document.number || '',
+      date: result.document.date || ''
+    });
+  }
+
+  // Обернем в формат, который ожидает renderPreview:
+  return {
+    documents: docTypesFound,
+    validation: { errors: [], warnings: [] },
+    mergedData: {
+      counteragents: {
+        consignor: result.consignor || { present: false },
+        consignee: result.consignee || { present: false },
+        carrier: result.carrier || { present: false },
+        declarant: result.declarant || { present: false },
+        filler: result.filler || { present: false, role: "FILLER_DECLARANT" }
+      },
+      vehicles: result.vehicles || {},
+      countries: result.countries || {},
+      products: result.products || [],
+      registry: result.registry || { number: '', date: '' },
+      driver: result.driver || { present: false }
+    }
+  };
+}
+
+/**
  * Объединяет результаты агентов
  */
 function mergeAgentResults(results) {
@@ -232,8 +343,8 @@ function mergeAgentResults(results) {
 }
 
 // Заглушки для legacy
-async function analyzeSingleFile(filePart) {
-  return await analyzeFileAgent(filePart, "legacy_file");
+async function analyzeSingleFile(filePart, fileName = "legacy_file") {
+  return await analyzeFileAgent(filePart, fileName);
 }
 
 async function askGeminiComplex(inputParts) {

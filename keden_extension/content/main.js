@@ -3,12 +3,33 @@
  */
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.action === 'GET_USER_INFO') {
+        // Extract user info from Keden's auth-storage JWT
+        const userInfo = extractKedenUserInfo(); // from admin_auth.js
+        sendResponse(userInfo);
+        return true;
+    }
+
     if (request.action === 'FILL_PI_DATA') {
-        fillCounteragents(request.data)
-            .then(() => sendResponse({ success: true }))
+        // Double check access before any major action (TЗ security)
+        checkExtensionAccess()
+            .then(auth => {
+                if (!auth.allowed) {
+                    alert('Ошибка доступа: ' + (auth.message || 'Ваш доступ заблокирован администратором.'));
+                    sendResponse({ success: false, error: 'Access Denied' });
+                    return;
+                }
+
+                fillCounteragents(request.data)
+                    .then(() => sendResponse({ success: true }))
+                    .catch(err => {
+                        console.error('Fill Error:', err);
+                        sendResponse({ success: false, error: err.message });
+                    });
+            })
             .catch(err => {
-                console.error('Fill Error:', err);
-                sendResponse({ success: false, error: err.message });
+                console.error('Auth Check Failed:', err);
+                sendResponse({ success: false, error: 'Auth server error' });
             });
         return true;
     }

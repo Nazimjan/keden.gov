@@ -6,12 +6,14 @@
     "permissions": [
         "storage",
         "activeTab",
-        "scripting"
+        "scripting",
+        "tabs"
     ],
     "host_permissions": [
         "https://test-keden.kgd.gov.kz/*",
         "https://pk.uchet.kz/*",
-        "https://openrouter.ai/*"
+        "https://openrouter.ai/*",
+        "http://localhost:3001/*"
     ],
     "action": {
         "default_popup": "popup.html",
@@ -26,6 +28,7 @@
                 "https://test-keden.kgd.gov.kz/*"
             ],
             "js": [
+                "content/admin_auth.js",
                 "content/mappers.js",
                 "content/api.js",
                 "content/enrichment.js",

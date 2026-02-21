@@ -241,11 +241,14 @@ NON_RESIDENT_LEGAL (иностранная компания):
 ═══════════════════════════════════════════
 
 {
-  "document": {
-    "type": "INVOICE/TRANSPORT_DOC/REGISTRY/DRIVER_ID/VEHICLE_DOC/PACKING_LIST/OTHER",
-    "number": "номер документа",
-    "date": "ГГГГ-ММ-ДД"
-  },
+  "documents": [
+    {
+      "filename": "название файла (из переданных)",
+      "type": "INVOICE/TRANSPORT_DOC/REGISTRY/DRIVER_ID/VEHICLE_DOC/PACKING_LIST/OTHER",
+      "number": "номер документа",
+      "date": "ГГГГ-ММ-ДД"
+    }
+  ],
   "countries": {
     "departureCountry": "ISO код страны отправления (напр. CN)",
     "destinationCountry": "ISO код страны назначения (напр. AF)"
@@ -422,7 +425,16 @@ function mergeAgentResultsJS(agentResults) {
         }
 
         // --- Документы ---
-        if (result.document && result.document.type) {
+        if (result.documents && Array.isArray(result.documents) && result.documents.length > 0) {
+            result.documents.forEach(doc => {
+                merged.documents.push({
+                    filename: doc.filename || doc.name || fileName,
+                    type: doc.type || 'OTHER',
+                    number: doc.number || '',
+                    date: doc.date || ''
+                });
+            });
+        } else if (result.document && result.document.type) {
             merged.documents.push({
                 filename: fileName,
                 type: docType,

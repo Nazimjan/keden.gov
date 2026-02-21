@@ -16,21 +16,48 @@ function showLoading(show) {
     document.getElementById('startBtn').disabled = show;
 }
 
-function handleFiles(files) {
+window.appExtensionFiles = [];
+
+function handleFiles(newFiles) {
+    window.appExtensionFiles = window.appExtensionFiles.concat(newFiles);
+    renderFileList();
+}
+
+function renderFileList() {
     const fileList = document.getElementById('fileList');
     fileList.innerHTML = '';
 
-    if (files.length > 0) {
-        files.forEach(file => {
+    if (window.appExtensionFiles.length > 0) {
+        window.appExtensionFiles.forEach((file, index) => {
             const item = document.createElement('div');
             item.className = 'file-item';
-            item.style.padding = '4px';
-            item.style.borderBottom = '1px solid rgba(255,255,255,0.05)';
-            item.innerText = `📄 ${file.name}`;
+            item.style.cssText = 'padding: 6px; border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; align-items: center;';
+
+            const nameSpan = document.createElement('span');
+            nameSpan.innerText = `📄 ${file.name}`;
+            nameSpan.style.cssText = 'overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 10px;';
+            nameSpan.title = file.name;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.innerText = '✖';
+            removeBtn.style.cssText = 'background: none; border: none; color: #ef4444; cursor: pointer; font-size: 14px; padding: 0 4px; border-radius: 4px; transition: background 0.2s;';
+            removeBtn.onmouseover = () => removeBtn.style.background = 'rgba(239, 68, 68, 0.1)';
+            removeBtn.onmouseout = () => removeBtn.style.background = 'none';
+            removeBtn.onclick = (e) => {
+                e.stopPropagation();
+                window.appExtensionFiles.splice(index, 1);
+                renderFileList();
+            };
+
+            item.appendChild(nameSpan);
+            item.appendChild(removeBtn);
             fileList.appendChild(item);
         });
         document.getElementById('statusMessage').style.display = 'block';
-        document.getElementById('statusMessage').innerText = `Выбрано файлов: ${files.length}`;
+        document.getElementById('statusMessage').innerText = `Выбрано файлов: ${window.appExtensionFiles.length}`;
+    } else {
+        document.getElementById('statusMessage').style.display = 'none';
+        document.getElementById('statusMessage').innerText = '';
     }
 }
 
@@ -58,15 +85,71 @@ if (dropZone && fileInput) {
         dropZone.style.background = 'transparent';
         const files = e.dataTransfer.files;
         if (files.length > 0) {
-            fileInput.files = files;
             handleFiles(Array.from(files));
         }
     });
 
     fileInput.onchange = (e) => {
-        handleFiles(Array.from(e.target.files));
+        if (e.target.files.length > 0) {
+            handleFiles(Array.from(e.target.files));
+        }
+        // Сбрасываем input, чтобы можно было выбрать тот же файл еще раз, если его удалили из списка
+        e.target.value = '';
     };
 }
+
+let kedenDirectorySettings = {};
+
+// Загрузка настроек справочника
+chrome.storage.local.get(['kedenDirectorySettings'], (result) => {
+    if (result.kedenDirectorySettings) {
+        kedenDirectorySettings = result.kedenDirectorySettings;
+        const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; }
+        setVal('prefCarrierBin', kedenDirectorySettings.carrierBin);
+        setVal('prefDeclarantBin', kedenDirectorySettings.declarantBin);
+        setVal('prefFillerBin', kedenDirectorySettings.fillerBin);
+        setVal('prefCustomsCode', kedenDirectorySettings.customsCode);
+        setVal('prefTransportMode', kedenDirectorySettings.transportMode);
+        setVal('prefRepCertNum', kedenDirectorySettings.repCertNum);
+        setVal('prefRepCertDate', kedenDirectorySettings.repCertDate);
+        setVal('prefAeoCertNum', kedenDirectorySettings.aeoCertNum);
+        setVal('prefAeoCertDate', kedenDirectorySettings.aeoCertDate);
+        setVal('prefPoaNum', kedenDirectorySettings.poaNum);
+        setVal('prefPoaDateStr', kedenDirectorySettings.poaDateStr);
+        setVal('prefPoaDateEnd', kedenDirectorySettings.poaDateEnd);
+    }
+});
+
+// Управление панелью настроек
+document.getElementById('settingsBtn').onclick = () => {
+    document.getElementById('settingsPanel').style.display = 'block';
+};
+
+document.getElementById('closeSettingsBtn').onclick = () => {
+    document.getElementById('settingsPanel').style.display = 'none';
+};
+
+document.getElementById('saveSettingsBtn').onclick = () => {
+    kedenDirectorySettings = {
+        carrierBin: document.getElementById('prefCarrierBin').value.trim(),
+        declarantBin: document.getElementById('prefDeclarantBin').value.trim(),
+        fillerBin: document.getElementById('prefFillerBin').value.trim(),
+        customsCode: document.getElementById('prefCustomsCode').value.trim(),
+        transportMode: document.getElementById('prefTransportMode').value.trim(),
+        repCertNum: document.getElementById('prefRepCertNum').value.trim(),
+        repCertDate: document.getElementById('prefRepCertDate').value.trim(),
+        aeoCertNum: document.getElementById('prefAeoCertNum').value.trim(),
+        aeoCertDate: document.getElementById('prefAeoCertDate').value.trim(),
+        poaNum: document.getElementById('prefPoaNum').value.trim(),
+        poaDateStr: document.getElementById('prefPoaDateStr').value.trim(),
+        poaDateEnd: document.getElementById('prefPoaDateEnd').value.trim()
+    };
+    chrome.storage.local.set({ kedenDirectorySettings }, () => {
+        const status = document.getElementById('settingsSaveStatus');
+        status.style.display = 'block';
+        setTimeout(() => status.style.display = 'none', 2000);
+    });
+};
 
 let currentAIData = null;
 let registryDocumentFileBase64 = null;
@@ -77,7 +160,94 @@ function renderPreview(aiResponse) {
     // Handle both old and new structures
     const data = aiResponse.mergedData || aiResponse;
     const validation = aiResponse.validation || { errors: [], warnings: [] };
-    const documents = aiResponse.documents || [];
+    let documents = aiResponse.documents || [];
+
+    // --- ПРИМЕНЕНИЕ НАСТРОЕК (СПРАВОЧНИК) ---
+    if (data.counteragents) {
+        const ca = data.counteragents;
+
+        // Вспомогательная функция для проставления БИН/ИИН, если справочник заполнен
+        const applyBin = (agent, bin) => {
+            if (bin) {
+                if (!agent) agent = { present: true, entityType: 'LEGAL' };
+                else agent.present = true;
+
+                if (agent.entityType === 'PHYSICAL' || agent.entityType === 'IE') {
+                    if (!agent.person) agent.person = {};
+                    agent.person.iin = bin;
+                } else {
+                    if (!agent.legal) agent.legal = {};
+                    agent.legal.bin = bin;
+                }
+            }
+            return agent;
+        };
+
+        ca.carrier = applyBin(ca.carrier, kedenDirectorySettings.carrierBin);
+        ca.declarant = applyBin(ca.declarant, kedenDirectorySettings.declarantBin);
+
+        // Для Заполнителя у нас person.iin или сразу iin, но мы обычно используем iin и powerOfAttorney
+        if (kedenDirectorySettings.fillerBin) {
+            if (!ca.filler) ca.filler = { present: true, role: "FILLER_DECLARANT" };
+            else ca.filler.present = true;
+            ca.filler.iin = kedenDirectorySettings.fillerBin;
+        }
+
+        // Свидетельство представителя (для декларанта)
+        if (kedenDirectorySettings.repCertNum || kedenDirectorySettings.repCertDate) {
+            if (!ca.declarant) ca.declarant = { present: true, entityType: 'LEGAL' };
+            ca.declarant.present = true;
+            ca.declarant.representativeCertificate = {
+                docNumber: kedenDirectorySettings.repCertNum || (ca.declarant.representativeCertificate?.docNumber || ""),
+                docDate: kedenDirectorySettings.repCertDate || (ca.declarant.representativeCertificate?.docDate || "")
+            };
+        }
+
+        // Доверенность (для заполнителя)
+        if (kedenDirectorySettings.poaNum || kedenDirectorySettings.poaDateStr || kedenDirectorySettings.poaDateEnd) {
+            if (!ca.filler) ca.filler = { present: true, role: "FILLER_DECLARANT" };
+            ca.filler.present = true;
+            ca.filler.powerOfAttorney = {
+                docNumber: kedenDirectorySettings.poaNum || (ca.filler.powerOfAttorney?.docNumber || ""),
+                docDate: kedenDirectorySettings.poaDateStr || (ca.filler.powerOfAttorney?.docDate || ""),
+                startDate: kedenDirectorySettings.poaDateStr || (ca.filler.powerOfAttorney?.startDate || ""),
+                endDate: kedenDirectorySettings.poaDateEnd || (ca.filler.powerOfAttorney?.endDate || "")
+            };
+
+            // Если доверенность указана в профиле, прокидываем её и в 44 графу если её там нет
+            if (kedenDirectorySettings.poaNum && !documents.some(d => d.type === '09024')) {
+                documents.push({
+                    filename: 'Справочник: Доверенность',
+                    type: '09024',
+                    number: kedenDirectorySettings.poaNum,
+                    date: kedenDirectorySettings.poaDateStr
+                });
+            }
+        }
+
+        // Свидетельство УЭО (09011)
+        if (kedenDirectorySettings.aeoCertNum) {
+            if (!documents.some(d => d.type === '09011')) {
+                documents.push({
+                    filename: 'Справочник: Свид. УЭО',
+                    type: '09011',
+                    number: kedenDirectorySettings.aeoCertNum,
+                    date: kedenDirectorySettings.aeoCertDate || ''
+                });
+            }
+        }
+    }
+
+    if (kedenDirectorySettings.customsCode) {
+        if (!data.shipping) data.shipping = {};
+        data.shipping.customsCode = kedenDirectorySettings.customsCode;
+    }
+
+    if (kedenDirectorySettings.transportMode) {
+        if (!data.shipping) data.shipping = {};
+        data.shipping.transportMode = kedenDirectorySettings.transportMode;
+    }
+    // ----------------------------------------
 
     currentAIData = data;
     currentAIData.documents = documents;
@@ -150,6 +320,7 @@ function renderPreview(aiResponse) {
             'TRANSPORT_DOC': '02015',
             'REGISTRY': '09011',
             'POWER_OF_ATTORNEY': '09024',
+            '11004': '09024',
             'OTHER': '11005'
         };
         const currentCode = typeToCode[doc.type] || doc.type || '00000';
@@ -200,13 +371,18 @@ function renderPreview(aiResponse) {
                 filePart = { inlineData: { data: base64, mimeType: file.type || 'image/jpeg' } };
             }
 
-            const result = await analyzeSingleFile(filePart);
+            const result = await analyzeSingleFile(filePart, file.name);
+
+            // ИИ теперь возвращает массив documents
+            const docObj = (result.documents && result.documents.length > 0)
+                ? result.documents[0]
+                : (result.document || {});
 
             const newDoc = {
                 filename: file.name,
-                type: result.type,
-                number: result.number,
-                date: result.date
+                type: docObj.type || 'OTHER',
+                number: docObj.number || '',
+                date: docObj.date || ''
             };
 
             // Add to current data
@@ -265,6 +441,17 @@ function renderPreview(aiResponse) {
                     <div style="flex: 1;">
                         <label style="font-size: 10px; color: #64748b;">Страна назначения</label>
                         <input type="text" class="preview-input" id="prev-destination-country" value="${data.countries?.destinationCountry || ''}" placeholder="ISO (например, AF)">
+                    </div>
+                </div>
+
+                <div class="row" style="margin-top: 8px; gap: 8px;">
+                    <div style="flex: 1;">
+                        <label style="font-size: 10px; color: #64748b;">Пост отправления (код)</label>
+                        <input type="text" class="preview-input" id="prev-customs-code" value="${data.shipping?.customsCode || ''}" placeholder="Например: 57505">
+                    </div>
+                    <div style="flex: 1;">
+                        <label style="font-size: 10px; color: #64748b;">Вид транспорта (код)</label>
+                        <input type="text" class="preview-input" id="prev-transport-mode" value="${data.shipping?.transportMode || ''}" placeholder="Например: 31">
                     </div>
                 </div>
             `;
@@ -545,10 +732,19 @@ function scrapePreviewData() {
 
     const depInput = document.getElementById('prev-departure-country');
     const destInput = document.getElementById('prev-destination-country');
-    if (depInput || destInput) {
+    const customsInput = document.getElementById('prev-customs-code');
+    const transportInput = document.getElementById('prev-transport-mode');
+
+    if (depInput || destInput || customsInput || transportInput) {
         if (!newData.countries) newData.countries = {};
         newData.countries.departureCountry = depInput?.value || "";
         newData.countries.destinationCountry = destInput?.value || "";
+
+        if (customsInput || transportInput) {
+            if (!newData.shipping) newData.shipping = {};
+            if (customsInput) newData.shipping.customsCode = customsInput.value;
+            if (transportInput) newData.shipping.transportMode = transportInput.value;
+        }
     }
 
     // Scrape Counteragents

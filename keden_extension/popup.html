@@ -397,9 +397,97 @@
 <body>
     <div class="container" id="mainContainer">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h1>KEDEN AI</h1>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <h1>KEDEN AI</h1>
+                <button id="settingsBtn" title="Настройки (Справочник)"
+                    style="background:none; border:none; cursor:pointer; color: #a855f7; font-size: 18px;">⚙️</button>
+            </div>
             <button id="openTabBtn" title="Открыть в новой вкладке"
                 style="background:none; border:none; cursor:pointer; color: #a855f7; font-size: 18px;">⤢</button>
+        </div>
+
+        <div id="authStatus"
+            style="font-size: 11px; margin-bottom: 15px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); display: none;">
+        </div>
+
+        <div id="settingsPanel"
+            style="display: none; background: rgba(15, 23, 42, 0.95); position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 100; border-radius: 20px; padding: 24px; box-sizing: border-box; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                <h2 style="font-size: 16px; margin: 0; color: #a855f7;">Справочник (По умолчанию)</h2>
+                <button id="closeSettingsBtn"
+                    style="background:none; border:none; color:#ef4444; font-size:24px; cursor:pointer;">&times;</button>
+            </div>
+
+            <div style="font-size: 12px; margin-bottom: 10px;">
+                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Перевозчик (БИН/ИИН)</label>
+                <input type="text" id="prefCarrierBin"
+                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+            </div>
+            <div style="font-size: 12px; margin-bottom: 10px;">
+                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Декларант (БИН/ИИН)</label>
+                <input type="text" id="prefDeclarantBin"
+                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+            </div>
+            <div style="font-size: 12px; margin-bottom: 10px;">
+                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Заполнитель (БИН/ИИН)</label>
+                <input type="text" id="prefFillerBin"
+                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+            </div>
+
+            <div style="font-size: 12px; margin-bottom: 10px;">
+                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Таможенный орган отправления
+                    (код)</label>
+                <input type="text" id="prefCustomsCode" placeholder="Например: 57505"
+                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+            </div>
+
+            <div style="font-size: 12px; margin-bottom: 10px;">
+                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Вид транспорта на границе (код)</label>
+                <input type="text" id="prefTransportMode" placeholder="Например: 31"
+                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+            </div>
+
+            <hr style="border-top: 1px solid rgba(255,255,255,0.1); margin: 15px 0;">
+
+            <div style="font-size: 12px; margin-bottom: 10px;">
+                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Свидетельство ТП - номер, дата</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="prefRepCertNum" placeholder="Номер св-ва"
+                        style="flex: 2; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+                    <input type="text" id="prefRepCertDate" placeholder="ДД.ММ.ГГГГ"
+                        style="flex: 1; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+                </div>
+            </div>
+
+            <div style="font-size: 12px; margin-bottom: 10px;">
+                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Свидетельство УЭО (09011) - номер,
+                    дата</label>
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="prefAeoCertNum" placeholder="Номер св-ва"
+                        style="flex: 2; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+                    <input type="text" id="prefAeoCertDate" placeholder="ДД.ММ.ГГГГ"
+                        style="flex: 1; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+                </div>
+            </div>
+
+            <div style="font-size: 12px; margin-bottom: 10px;">
+                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Доверенность (09024) - номер, дата
+                    выдачи, окончание</label>
+                <input type="text" id="prefPoaNum" placeholder="Номер довер."
+                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box; margin-bottom: 6px;">
+                <div style="display: flex; gap: 8px;">
+                    <input type="text" id="prefPoaDateStr" placeholder="Выдача ДД.ММ.ГГГГ"
+                        style="flex: 1; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+                    <input type="text" id="prefPoaDateEnd" placeholder="Годен до ДД.ММ.ГГГГ"
+                        style="flex: 1; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+                </div>
+            </div>
+
+            <button id="saveSettingsBtn" class="btn" style="margin-top: 15px; width: 100%;">СОХРАНИТЬ
+                справочник</button>
+            <div id="settingsSaveStatus"
+                style="color: #4ade80; font-size: 11px; margin-top: 8px; text-align: center; display: none;">Сохранено!
+            </div>
         </div>
 
         <div class="content-layout">

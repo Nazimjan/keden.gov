@@ -1,7 +1,162 @@
 /**
  * KEDEN Extension - POPUP (Main Entry Point)
  * Swarm Agent Architecture: 2-Phase Processing
+ * + Admin Panel Auth Integration
  */
+
+const ADMIN_API = 'http://localhost:3001';
+let currentUserInfo = null; // Will store { iin, fio } after auth check
+
+/**
+ * Fetch user info directly from the Keden tab's localStorage via scripting API
+ */
+async function getKedenUserInfo() {
+    try {
+        const tabs = await chrome.tabs.query({ url: "*://test-keden.kgd.gov.kz/*" });
+        const kedenTab = tabs.find(t => t.url && t.url.includes('keden.kgd.gov.kz'));
+        if (!kedenTab) return null;
+
+        const results = await chrome.scripting.executeScript({
+            target: { tabId: kedenTab.id },
+            func: () => {
+                try {
+                    const authStorage = localStorage.getItem('auth-storage');
+                    if (!authStorage) return null;
+                    const state = JSON.parse(authStorage).state;
+                    if (!state || !state.token) return null;
+
+                    let iin = '', fio = '';
+                    const accessToken = state.token.access_token;
+                    if (accessToken) {
+                        try {
+                            const parts = accessToken.split('.');
+                            if (parts.length === 3) {
+                                // Correctly decode UTF-8 from Base64
+                                const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+                                const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
+                                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+                                }).join(''));
+                                const payload = JSON.parse(jsonPayload);
+                                iin = payload.iin || '';
+                                fio = payload.fullName || payload.name || '';
+                            }
+                        } catch (e) { }
+                    }
+                    if (!iin && state.user) {
+                        iin = state.user.iin || '';
+                        fio = fio || state.user.fullName || '';
+                    }
+                    if (!iin && state.userAccountData) {
+                        iin = state.userAccountData.iin || '';
+                        const ud = state.userAccountData;
+                        fio = fio || [ud.lastName, ud.firstName, ud.middleName].filter(Boolean).join(' ');
+                    }
+                    if (!iin) return null;
+                    return { iin, fio: fio || iin };
+                } catch (e) { return null; }
+            }
+        });
+
+        return results && results[0] && results[0].result ? results[0].result : null;
+    } catch (e) {
+        console.error('[Admin Auth] executeScript failed:', e);
+        return null;
+    }
+}
+
+/**
+ * Check authorization against admin backend
+ */
+async function checkAdminAuth() {
+    const userInfo = await getKedenUserInfo();
+    if (!userInfo || !userInfo.iin) {
+        return { allowed: false, message: 'Не удалось определить пользователя ИС Кеден. Откройте страницу Keden и авторизуйтесь.', userInfo: null };
+    }
+
+    try {
+        const resp = await fetch(`${ADMIN_API}/api/ext/auth`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ iin: userInfo.iin, fio: userInfo.fio })
+        });
+        const data = await resp.json();
+        return { ...data, userInfo };
+    } catch (e) {
+        // Admin server offline — allow access (graceful degradation)
+        return { allowed: true, message: 'Сервер администрирования недоступен.', userInfo, offline: true };
+    }
+}
+
+/**
+ * Send action log to admin backend
+ */
+async function sendAdminLog(actionType, description = '') {
+    if (!currentUserInfo) return;
+    try {
+        await fetch(`${ADMIN_API}/api/ext/log`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                iin: currentUserInfo.iin,
+                fio: currentUserInfo.fio,
+                action_type: actionType,
+                description
+            })
+        });
+    } catch (e) { /* offline */ }
+}
+
+/**
+ * Show access denied overlay
+ */
+function showAccessDenied(message) {
+    const overlay = document.createElement('div');
+    overlay.id = 'access-denied-overlay';
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(10,14,26,0.95);z-index:10000;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:40px;text-align:center;';
+    overlay.innerHTML = `
+        <div style="font-size:64px">🔒</div>
+        <h2 style="color:#f1f5f9;font-size:1.5rem;">Доступ запрещён</h2>
+        <p style="color:#94a3b8;max-width:400px;line-height:1.6;">${message}</p>
+        <p style="color:#64748b;font-size:0.8rem;margin-top:20px;">Обратитесь к администратору для получения доступа</p>
+    `;
+    document.body.appendChild(overlay);
+}
+
+// ===== MAIN INIT: Auth Check =====
+(async function initAuth() {
+    const result = await checkAdminAuth();
+    if (result.userInfo) {
+        currentUserInfo = result.userInfo;
+    }
+    if (!result.allowed) {
+        showAccessDenied(result.message || 'Доступ запрещён');
+        return; // Don't attach button handlers
+    }
+
+    // Display auth status
+    const authStatusDiv = document.getElementById('authStatus');
+    if (authStatusDiv && result.user) {
+        let subText = '';
+        if (result.user.hasSubscription) {
+            subText = `<span style="color: #4ade80;">Безлимит до: ${result.user.subscription_end.split('T')[0]}</span>`;
+        } else {
+            subText = `<span style="color: #4ade80;">Кредитов: ${result.user.credits || 0} ПИ</span>`;
+        }
+
+        authStatusDiv.innerHTML = `
+            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                <span style="color:#94a3b8; font-weight: 600;">${result.user.fio || result.user.iin}</span>
+            </div>
+            <div>Статус: ${subText}</div>
+        `;
+        authStatusDiv.style.display = 'block';
+    }
+
+    // Log successful auth check
+    if (!result.offline) {
+        sendAdminLog('AUTH_CHECK', 'Расширение открыто');
+    }
+})();
 
 document.getElementById('openTabBtn').onclick = () => {
     logButtonClick('openTabBtn');
@@ -10,8 +165,7 @@ document.getElementById('openTabBtn').onclick = () => {
 
 document.getElementById('startBtn').onclick = async () => {
     logButtonClick('startBtn');
-    const fileInput = document.getElementById('fileInput');
-    const files = Array.from(fileInput.files);
+    const files = window.appExtensionFiles || [];
 
     if (files.length === 0) {
         alert('Пожалуйста, выберите хотя бы один файл');
@@ -77,83 +231,35 @@ document.getElementById('startBtn').onclick = async () => {
         }
 
         // =====================================================
-        // ФАЗА 2: Агенты работают с ограничением параллелизма (макс 3 одновременно)
+        // ФАЗА 2: Анализ всех файлов единым запросом (Batching)
         // =====================================================
-        // --- ЗАПУСК АГЕНТОВ (РАБОЧИЙ ПУЛ) ---
-        const MAX_CONCURRENT = 15; // Максимальная скорость
-        setStatus(`🤖 ${files.length} файлов, обработка по ${MAX_CONCURRENT} параллельно...`);
-        let completed = 0;
+        setStatus(`🤖 Отправка ${files.length} файлов единым пакетом для анализа...`);
 
-        const results = [];
-        const queue = [...fileJobs];
+        const allParts = fileJobs.map(job => job.filePart);
+        const fileNames = fileJobs.map(job => job.file.name);
 
-        async function processJob(job) {
-            try {
-                const result = await analyzeFileAgent(job.filePart, job.file.name);
-                completed++;
-                setStatus(`🤖 Готово ${completed}/${files.length} файлов...`);
-                return { status: 'ok', result, job };
-            } catch (err) {
-                completed++;
-                console.warn(`Ошибка агента ${job.file.name}:`, err);
-                setStatus(`🤖 Готово ${completed}/${files.length} файлов...`);
-                return {
-                    status: 'error', job,
-                    result: {
-                        filename: job.file.name,
-                        error: err.message,
-                        document: { type: 'UNKNOWN', number: '', date: '' },
-                        counteragents: { consignor: { present: false }, consignee: { present: false }, carrier: { present: false } },
-                        products: [],
-                        vehicles: {},
-                        driver: { present: false }
-                    }
-                };
-            }
+        let finalData;
+        try {
+            finalData = await analyzeAllFilesAgent(allParts, fileNames);
+        } catch (err) {
+            throw new Error(`Ошибка пакетного анализа: ${err.message}`);
         }
 
-        // Пул воркеров: строго MAX_CONCURRENT одновременно
-        async function runPool() {
-            const workers = [];
-            for (let i = 0; i < MAX_CONCURRENT; i++) {
-                workers.push((async () => {
-                    while (queue.length > 0) {
-                        const job = queue.shift();
-                        if (!job) break;
-                        const res = await processJob(job);
-                        results.push(res);
-                    }
-                })());
-            }
-            await Promise.all(workers);
-        }
-        await runPool();
-
-        const settled = results;
-
-        const agentResults = settled.map(s => s.result);
-        const processedFiles = settled.map(s => {
-            const fp = s.job.filePart;
+        const processedFiles = fileJobs.map(job => {
+            const fp = job.filePart;
             const base64 = fp.inlineData ? fp.inlineData.data :
                 btoa(unescape(encodeURIComponent(fp.text || '')));
             return {
-                name: s.job.file.name,
+                name: job.file.name,
                 base64: base64,
-                mimeType: s.job.mimeType,
+                mimeType: job.mimeType,
                 isBinary: !!fp.inlineData
             };
         });
 
-        // Debug: показываем размер результатов
-        const resultsJson = JSON.stringify(agentResults);
-        console.log(`📊 Agent results size: ${resultsJson.length} chars (~${Math.round(resultsJson.length / 4)} tokens). Files: ${files.length}`);
-
         // =====================================================
-        // ФАЗА 3: JS-мерж объединяет результаты (мгновенно)
+        // ФАЗА 3: Отрисовка результатов
         // =====================================================
-        setStatus('🔧 Объединение результатов...');
-
-        const finalData = mergeAgentResults(agentResults);
         finalData.rawFiles = processedFiles; // Attach raw files for later use
 
         showLoading(false);
@@ -168,19 +274,7 @@ document.getElementById('startBtn').onclick = async () => {
     }
 };
 
-// Add listener to show file names when selected
-document.getElementById('fileInput').onchange = (e) => {
-    const fileList = document.getElementById('fileList');
-    fileList.innerHTML = '';
-    const files = Array.from(e.target.files);
-    if (files.length > 0) {
-        files.forEach(f => {
-            const div = document.createElement('div');
-            div.textContent = `📄 ${f.name}`;
-            fileList.appendChild(div);
-        });
-    }
-};
+// fileInput.onchange is handled globally in ui.js now
 
 document.getElementById('confirmFillBtn').onclick = async () => {
     logButtonClick('confirmFillBtn');
@@ -215,8 +309,8 @@ document.getElementById('confirmFillBtn').onclick = async () => {
                 return;
             }
             if (response && response.success) {
-                setStatus('✅ Готово!');
-                setTimeout(() => window.close(), 2000);
+                setStatus('✅ Готово! Данные успешно отправлены.');
+                sendAdminLog('FILL_PI', `Заполнение ПИ декларации`);
             } else {
                 setStatus('❌ ' + (response ? response.error : 'Ошибка'));
             }
