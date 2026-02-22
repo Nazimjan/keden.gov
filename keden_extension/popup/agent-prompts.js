@@ -217,6 +217,13 @@ const FILE_AGENT_PROMPT = `
 ⛔ ТОВАРЫ: Если видишь строку, где стоит «ИТОГО», «TOTAL», «Сумма», «Amount» в конце списка — ПРОПУСТИ ЕЁ. Это не товар, это сумма всех товаров.
    Количество элементов в массиве products должно быть равно количеству строк с товарами в инвойсе.
 
++⛔ КРИТИЧЕСКАЯ КРОСС-ПРОВЕРКА (ОБЯЗАТЕЛЬНО):
++1. Пакетная проверка мест: Сумма всех quantity в массиве products ДОЛЖНА строго совпадать с totalPackages документа.
++2. Пакетная проверка веса: Сумма всех grossWeight в массиве products ДОЛЖНА строго совпадать с totalWeight документа.
++3. ЛИМИТ МЕСТ: Количество мест (quantity) никогда не превышает 3000 в одной поставке. Если ты видишь число больше 3000 в колонке "количество" — это ОШИБКА (скорее всего ты взял количество штук вместо мест). Перепроверь другие колонки.
++4. Если суммы не сходятся — ПЕРЕПРОВЕРЬ КОЛОНКИ и выбери ту, где итог сходится.
++5. В поле "quantity" пиши только КОЛИЧЕСТВО МЕСТ (упаковок). Если в инвойсе есть и "места", и "штуки" — бери "места".
+
 ⛔ ВНИМАНИЕ: Если в поле "адрес" в документе указан номер телефона (напр. +93...), НЕ ПИШИ ЕГО. Ищи строку с названием города/улицы. Если адреса нет — оставь поле пустым.
    Для нерезидентов город пиши ВЕРХНИМ РЕГИСТРОМ в поле "district".
 
@@ -303,22 +310,7 @@ NON_RESIDENT_LEGAL (иностранная компания):
     "iin": "",
     "firstName": "",
     "lastName": ""
-  },
-  "filler": {
-    "present": true,
-    "role": "FILLER_DECLARANT",
-    "iin": "12ЦИФР",
-    "firstName": "ИМЯ",
-    "lastName": "ФАМИЛИЯ",
-    "patronymic": "ОТЧЕСТВО",
-    "powerOfAttorney": {
-      "docNumber": "№01",
-      "docDate": "2026-02-18",
-      "startDate": "2026-02-18",
-      "endDate": "2027-02-18",
-      "typeCode": "09024"
-    }
-  }
+
 }
 
 ⛔ КРИТИЧЕСКИ ВАЖНО ДЛЯ CMR:
@@ -385,7 +377,6 @@ function mergeAgentResultsJS(agentResults) {
         declarant: [],
         vehicles: [],
         driver: [],
-        filler: [], // [{source, data: {...}}]
         countries: [],
         productCandidates: [], // {source, docType, priority, products[]}
         docTotals: [] // [{source, type, weight, packages, cost}]
@@ -465,11 +456,6 @@ function mergeAgentResultsJS(agentResults) {
         // --- Собираем ВСЕ упоминания водителя ---
         if (result.driver && result.driver.present) {
             mentions.driver.push({ source: sourceLabel, docType, data: result.driver });
-        }
-
-        // --- Собираем ВСЕ упоминания подписанта (filler) ---
-        if (result.filler && result.filler.present) {
-            mentions.filler.push({ source: sourceLabel, docType, data: result.filler });
         }
 
         // --- Общий вес из ЛЮБОГО документа (для сверки) ---
@@ -589,10 +575,6 @@ function mergeAgentResultsJS(agentResults) {
     // =======================================================
     _validateAndMergeDriver(merged, mentions.driver);
 
-    // =======================================================
-    // ФАЗА 4.5: Сверить и объединить подписанта (filler)
-    // =======================================================
-    _validateAndMergeFiller(merged, mentions.filler);
 
     // =======================================================
     // ФАЗА 5: Дедупликация товаров + валидация
@@ -928,47 +910,6 @@ function _validateAndMergeDriver(merged, driverMentions) {
     };
 }
 
-/**
- * Сверяет и объединяет данные подписанта (filler).
- * Приоритет: POWER_OF_ATTORNEY > остальные (например, если ФИО есть в договоре)
- */
-function _validateAndMergeFiller(merged, fillerMentions) {
-    if (fillerMentions.length === 0) {
-        merged.mergedData.counteragents.filler = _emptyFiller();
-        return;
-    }
-
-    // Сортируем: Доверенность в приоритете
-    fillerMentions.sort((a, b) => {
-        if (a.docType === 'POWER_OF_ATTORNEY') return -1;
-        if (b.docType === 'POWER_OF_ATTORNEY') return 1;
-        return 0;
-    });
-
-    const bestMention = fillerMentions[0];
-    const data = bestMention.data;
-
-    merged.mergedData.counteragents.filler = {
-        present: true,
-        role: data.role || 'FILLER_DECLARANT',
-        iin: (data.iin || '').trim(),
-        firstName: (data.firstName || '').toUpperCase().trim(),
-        lastName: (data.lastName || '').toUpperCase().trim(),
-        patronymic: (data.patronymic || '').toUpperCase().trim(),
-        powerOfAttorney: {
-            docNumber: (data.powerOfAttorney?.docNumber || '').trim(),
-            docDate: (data.powerOfAttorney?.docDate || '').trim(),
-            startDate: (data.powerOfAttorney?.startDate || data.powerOfAttorney?.docDate || '').trim(),
-            endDate: (data.powerOfAttorney?.endDate || '').trim(),
-            typeCode: (data.powerOfAttorney?.typeCode || '11004').trim()
-        }
-    };
-
-    if (fillerMentions.length > 1) {
-        console.log(`ℹ️ Подписант объединен из ${fillerMentions.length} источников. Приоритет: ${bestMention.source}`);
-    }
-}
-
 
 // =====================================================
 // Финальная валидация
@@ -1079,8 +1020,7 @@ function _roleNameRu(role) {
         consignor: 'Отправитель',
         consignee: 'Получатель',
         carrier: 'Перевозчик',
-        declarant: 'Декларант',
-        filler: 'Подписант'
+        declarant: 'Декларант'
     };
     return map[role] || role;
 }

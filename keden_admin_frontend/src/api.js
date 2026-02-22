@@ -12,6 +12,10 @@ async function request(url, options = {}) {
     const data = await resp.json();
 
     if (!resp.ok) {
+        if (resp.status === 401) {
+            localStorage.removeItem('admin_token');
+            window.location.reload();
+        }
         throw new Error(data.error || 'Ошибка сервера');
     }
     return data;

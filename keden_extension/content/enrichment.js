@@ -5,18 +5,25 @@ async function processCounteragentEnrichment(source, headers) {
     if (bin && bin.length === 12) {
         console.log(`🔍 [Enrichment] Fetching data for: ${bin}`);
 
-        // Parallel fetch from Keden and Uchet.kz
-        const [kedenInfo, uchetInfo] = await Promise.all([
-            fetchTaxpayerInfo(bin, headers),
-            fetchUchetKzInfo(bin)
-        ]);
+        // Определяем тип эндпоинта: Заполнитель всегда ищется как физлицо
+        const isFiller = source.role === "FILLER_DECLARANT" || source.type === "FILLER_DECLARANT";
+        const isPerson = isFiller || (!source.legal && (!!source.person || !!source.iin || !!source.xin));
+        const endpointType = isPerson ? 'app-person' : 'app-legal';
+
+        // Fetch data from Keden integration API
+        const kedenInfo = await fetchTaxpayerInfo(bin, headers, endpointType);
 
         if (kedenInfo) {
             console.log(`✅ [Enrichment] Found Keden data for ${bin}`);
-            if (source.legal) {
+
+            source.kedenData = kedenInfo;
+
+            if (!isPerson && source.legal) {
+                // ПРИНУДИТЕЛЬНО обновляем название из базы для юрлица
                 source.legal.nameRu = kedenInfo.nameRu || kedenInfo.shortNameRu || source.legal.nameRu;
-                source.legal.shortNameRu = kedenInfo.shortNameRu || null;
-            } else if (source.person || source.iin) {
+                source.legal.shortNameRu = kedenInfo.shortNameRu || source.legal.shortNameRu;
+            } else if (isPerson) {
+                // Fallback для совместимости с другими частями кода для физлица
                 const target = source.person || source;
                 target.lastName = kedenInfo.lastName || target.lastName;
                 target.firstName = kedenInfo.firstName || target.firstName;
@@ -40,18 +47,8 @@ async function processCounteragentEnrichment(source, headers) {
                     postalCode: a.postalCode
                 }));
             }
-        }
-
-        // If uchet.kz has better info or Keden address is missing, use it
-        if (uchetInfo && uchetInfo.address && (!source.addresses || source.addresses.length === 0)) {
-            console.log(`📍 [Enrichment] Using address from uchet.kz for ${bin}`);
-            const parsed = parseUchetAddressSimple(uchetInfo.address);
-            if (parsed) {
-                source.addresses = [parsed];
-            }
-            if (source.legal && !source.legal.nameRu) {
-                source.legal.nameRu = uchetInfo.name;
-            }
+        } else {
+            console.warn(`⚠️ [Enrichment] No official data found in Keden for: ${bin}`);
         }
     }
 }

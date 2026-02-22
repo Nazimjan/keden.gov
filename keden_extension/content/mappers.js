@@ -42,11 +42,27 @@ function buildCounteragentPayload(source, extra) {
     const payload = {};
 
     const name = source.legal?.nameRu || source.nonResidentLegal?.nameRu || source.person?.lastName || "";
-    const entityType = normalizeEntityType(source.entityType, name);
+    let entityType = normalizeEntityType(source.entityType, name);
+
+    // СТРОГОЕ ПРАВИЛО: Декларант и Лицо заполнившее могут быть ТОЛЬКО резидентами (ЮЛ/ИП/ФЛ)
+    if (extra?.type === 'DECLARANT' || extra?.type === 'FILLER_DECLARANT') {
+        if (entityType.includes("NON_RESIDENT")) {
+            console.log(`⚠️ [Mappers] Forcing resident status for ${extra.type}`);
+            entityType = entityType.includes("PERSON") ? "INDIVIDUAL" : "LEGAL";
+        }
+        // Если ИИ ошибочно поместил данные в нерезидента - переносим в legal
+        if (source.nonResidentLegal && !source.legal) {
+            source.legal = {
+                nameRu: source.nonResidentLegal.nameRu,
+                bin: source.xin || source.iin || ""
+            };
+        }
+    }
+
     if (entityType) payload.entityType = entityType;
 
     // Ключевой идентификатор для ПИ (БИН или ИИН) - TЗ п.2.1
-    const rawBin = source.legal?.bin || source.person?.iin || source.iin || "";
+    const rawBin = source.legal?.bin || source.person?.iin || source.iin || source.xin || "";
     if (rawBin) {
         payload.xin = rawBin.toString().replace(/\D/g, '');
     }
@@ -128,7 +144,19 @@ function buildCounteragentPayload(source, extra) {
 
     if (source.nonResidentLegal) payload.nonResidentLegal = source.nonResidentLegal;
 
-    if (source.person || (source.iin && source.lastName)) {
+    if (source.kedenData && source.kedenData.iin) {
+        // Если есть официальные данные от Keden для физлица - используем их для блока person
+        payload.person = {
+            id: source.kedenData.id || null,
+            iin: source.kedenData.iin,
+            lastName: source.kedenData.lastName || source.kedenData.fullName?.split(' ')[0] || "",
+            firstName: source.kedenData.firstName || source.kedenData.fullName?.split(' ')[1] || "",
+            middleName: source.kedenData.middleName || source.kedenData.patronymic || source.kedenData.fullName?.split(' ')[2] || "",
+            birthDate: source.kedenData.birthDate || null,
+            fullName: source.kedenData.fullName
+        };
+        if (!payload.xin) payload.xin = source.kedenData.iin;
+    } else if (source.person || (source.iin && source.lastName)) {
         const p = source.person || source;
         payload.person = {
             iin: p.iin?.toString().replace(/\D/g, '') || "",
@@ -136,7 +164,7 @@ function buildCounteragentPayload(source, extra) {
             firstName: p.firstName || "",
             middleName: p.patronymic || p.middleName || ""
         };
-        if (payload.person.iin) {
+        if (!payload.xin && payload.person.iin) {
             payload.xin = payload.person.iin;
         }
     }

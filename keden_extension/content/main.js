@@ -74,11 +74,10 @@ async function fillCounteragents(params) {
 
     const counteragents = params && params.counteragents ? params.counteragents : {};
 
-    // ОБОГАЩЕНИЕ ДАННЫХ (FETCH BY BIN)
+    // ОБОГАЩЕНИЕ ДАННЫХ (FETCH BY BIN/IIN)
     await processCounteragentEnrichment(counteragents.consignee, headers);
     await processCounteragentEnrichment(counteragents.carrier, headers);
     await processCounteragentEnrichment(counteragents.declarant, headers);
-    await processCounteragentEnrichment(counteragents.filler, headers);
 
     // ОБРАБОТКА ТРАНСПОРТА (Vehicle Number)
     if (params.vehicles && params.vehicles.tractorRegNumber) {
@@ -328,14 +327,12 @@ async function fillCounteragents(params) {
         requests.push(carrierPayload);
     }
 
-    // 5. Двойная проверка Декларанта и Заполнителя (TЗ п.5)
+    // 5. Двойная проверка Декларанта (TЗ п.5)
     let existingDeclarant = null;
-    let existingFiller = null;
     try {
         const fullDecl = await getPIDeclaration(declId, headers);
         if (fullDecl && fullDecl.counteragents) {
             existingDeclarant = fullDecl.counteragents.find(c => c.type === 'DECLARANT');
-            existingFiller = fullDecl.counteragents.find(c => c.type === 'FILLER_DECLARANT');
         }
     } catch (e) {
         console.warn("Failed to check existing counteragents:", e);
@@ -365,21 +362,44 @@ async function fillCounteragents(params) {
         }
     }
 
-    const fillerPayload = buildCounteragentPayload(counteragents.filler, {
-        type: "FILLER_DECLARANT",
-        targetId: declId,
-        targetType: "PRELIMINARY",
-        roleCounteragent: {
-            code: "FILLER",
-            ru: "Лицо, заполнившее"
-        }
-    });
-    if (fillerPayload) {
-        if (existingFiller) {
-            console.log("ℹ️ Filler Declarant already exists, skipping.");
-        } else {
-            validateResidentInfo(fillerPayload, "Заполнитель");
-            requests.push(fillerPayload);
+    // ТЗ: Отправка заполнителя (брокера) напрямую из app-person
+    if (counteragents.filler && counteragents.filler.iin) {
+        try {
+            const fillerInfo = await fetchTaxpayerInfo(counteragents.filler.iin, headers, 'app-person');
+            if (fillerInfo) {
+                // Если fillerInfo вернуло нужные поля (lastName, firstName), собираем точный payload
+                const fillerPayload = {
+                    indexOrder: 0,
+                    type: "FILLER_DECLARANT",
+                    person: {
+                        id: fillerInfo.id || null,
+                        iin: fillerInfo.iin,
+                        lastName: fillerInfo.lastName || "",
+                        firstName: fillerInfo.firstName || "",
+                        middleName: fillerInfo.middleName || fillerInfo.patronymic || "",
+                        birthDate: fillerInfo.birthDate || null,
+                        fullName: fillerInfo.fullName || `${fillerInfo.lastName} ${fillerInfo.firstName} ${fillerInfo.middleName || ''}`.trim()
+                    },
+                    entityType: "PERSON",
+                    targetId: declId,
+                    targetType: "PRELIMINARY",
+                    roleCounteragent: {
+                        id: 2028,
+                        code: "FILLER_DECLARANT",
+                        ru: "Лицо, заполнившее таможенный документ, со стороны декларанта"
+                    },
+                    representatives: [],
+                    sellerEqualIndicator: false,
+                    buyerEqualIndicator: false,
+                    contacts: [],
+                    xin: fillerInfo.iin,
+                    counteragentName: fillerInfo.fullName || `${fillerInfo.lastName} ${fillerInfo.firstName} ${fillerInfo.middleName || ''}`.trim(),
+                    carrierEqualIndicator: false
+                };
+                requests.push(fillerPayload);
+            }
+        } catch (e) {
+            console.warn("Error fetching filler from app-person:", e);
         }
     }
 
@@ -389,8 +409,8 @@ async function fillCounteragents(params) {
 
     const responses = [];
     for (const payload of requests) {
-        // Динамическое обогащение documentType.id по коду для декларанта/заполнителя
-        if ((payload.type === 'DECLARANT' || payload.type === 'FILLER_DECLARANT') && payload.registerDocument) {
+        // Динамическое обогащение documentType.id по коду для декларанта
+        if (payload.type === 'DECLARANT' && payload.registerDocument) {
             try {
                 const docTypes = await fetchDocumentTypes(headers);
                 const code = payload.registerDocument.documentType?.code;
@@ -411,7 +431,7 @@ async function fillCounteragents(params) {
         responses.push(resp);
 
         // Если это Декларант и у него есть свидетельство - обрабатываем в 2 этапа (TЗ п.4)
-        if ((payload.type === 'DECLARANT' || payload.type === 'FILLER_DECLARANT') && payload.registerDocument) {
+        if (payload.type === 'DECLARANT' && payload.registerDocument) {
             let declarantId = null;
             if (Array.isArray(resp)) {
                 const decl = resp.find(c => c.type === payload.type);
@@ -429,17 +449,17 @@ async function fillCounteragents(params) {
                         console.log('✅ Register document created:', docResp.id);
 
                         // 2. Привязываем документ к декларанту/заполнителю через PUT (TЗ п.4.2)
-                        // ВАЖНО: HAR показывает, что для заполнителя документ полномочий идет в powerOfAttorneyDocument
                         const isFiller = payload.type === 'FILLER_DECLARANT';
                         const updatePayload = {
                             ...payload,
                             id: declarantId
                         };
 
+                        // ВАЖНО: Для заполнителя документ может называться по-разному в разных версиях API.
+                        // Отправляем в оба доступных поля: и в стандартный registerDocument, и в powerOfAttorneyDocument.
+                        updatePayload.registerDocument = docResp;
                         if (isFiller) {
                             updatePayload.powerOfAttorneyDocument = docResp;
-                        } else {
-                            updatePayload.registerDocument = docResp;
                         }
 
                         console.log(`📡 Linked ${payload.type} with documentation (${isFiller ? 'POA' : 'Cert'})`);

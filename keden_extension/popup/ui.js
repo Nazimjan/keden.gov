@@ -107,7 +107,7 @@ chrome.storage.local.get(['kedenDirectorySettings'], (result) => {
         const setVal = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; }
         setVal('prefCarrierBin', kedenDirectorySettings.carrierBin);
         setVal('prefDeclarantBin', kedenDirectorySettings.declarantBin);
-        setVal('prefFillerBin', kedenDirectorySettings.fillerBin);
+
         setVal('prefCustomsCode', kedenDirectorySettings.customsCode);
         setVal('prefTransportMode', kedenDirectorySettings.transportMode);
         setVal('prefRepCertNum', kedenDirectorySettings.repCertNum);
@@ -133,7 +133,7 @@ document.getElementById('saveSettingsBtn').onclick = () => {
     kedenDirectorySettings = {
         carrierBin: document.getElementById('prefCarrierBin').value.trim(),
         declarantBin: document.getElementById('prefDeclarantBin').value.trim(),
-        fillerBin: document.getElementById('prefFillerBin').value.trim(),
+
         customsCode: document.getElementById('prefCustomsCode').value.trim(),
         transportMode: document.getElementById('prefTransportMode').value.trim(),
         repCertNum: document.getElementById('prefRepCertNum').value.trim(),
@@ -469,8 +469,7 @@ function renderPreview(aiResponse) {
             { id: 'consignor', label: 'Отправитель (Имя)', data: ca.consignor },
             { id: 'consignee', label: 'Получатель (БИН/ИИН)', data: ca.consignee },
             { id: 'carrier', label: 'Перевозчик (БИН/ИИН)', data: ca.carrier },
-            { id: 'declarant', label: 'Декларант (БИН/ИИН)', data: ca.declarant },
-            { id: 'filler', label: 'Заполнитель (БИН/ИИН)', data: ca.filler }
+            { id: 'declarant', label: 'Декларант (БИН/ИИН)', data: ca.declarant }
         ];
 
         agents.forEach(agent => {
@@ -513,29 +512,7 @@ function renderPreview(aiResponse) {
                     div.insertAdjacentHTML('beforeend', certHtml);
                 }
 
-                // Specific for Filler: Full Name and Power of Attorney
-                if (agent.id === 'filler') {
-                    const f = agent.data;
-                    const poa = f.powerOfAttorney || {};
-                    const fillerHtml = `
-                        <div style="display: flex; gap: 4px; margin-top: 4px;">
-                            <input type="text" class="preview-input" id="prev-filler-firstName" value="${f.firstName || ''}" placeholder="Имя" style="flex: 1;">
-                            <input type="text" class="preview-input" id="prev-filler-patronymic" value="${f.patronymic || ''}" placeholder="Отчество" style="flex: 1;">
-                        </div>
-                        <div style="margin-top: 4px; padding: 4px; background: rgba(148, 163, 184, 0.05); border-radius: 4px; border: 1px dashed #475569;">
-                            <label style="font-size: 9px; color: #64748b; display: block;">Доверенность (11004)</label>
-                            <div style="display: flex; gap: 4px; margin-bottom: 4px;">
-                                <input type="text" class="preview-input" id="prev-filler-poa-num" value="${poa.docNumber || ''}" placeholder="№ Доверенности" style="flex: 1;">
-                                <input type="text" class="preview-input" id="prev-filler-poa-date" value="${poa.docDate || ''}" placeholder="Дата" style="flex: 1;">
-                            </div>
-                            <div style="display: flex; gap: 4px;">
-                                <input type="text" class="preview-input" id="prev-filler-poa-start" value="${poa.startDate || poa.docDate || ''}" placeholder="С даты" style="flex: 1;">
-                                <input type="text" class="preview-input" id="prev-filler-poa-end" value="${poa.endDate || ''}" placeholder="По дату" style="flex: 1;">
-                            </div>
-                        </div>
-                    `;
-                    div.insertAdjacentHTML('beforeend', fillerHtml);
-                }
+
 
                 section.appendChild(div);
             }
@@ -748,7 +725,7 @@ function scrapePreviewData() {
     }
 
     // Scrape Counteragents
-    const agentIds = ['consignor', 'consignee', 'carrier', 'declarant', 'filler'];
+    const agentIds = ['consignor', 'consignee', 'carrier', 'declarant'];
     agentIds.forEach(id => {
         const binInput = document.getElementById(`prev-agent-bin-${id}`);
         const nameInput = document.getElementById(`prev-agent-name-${id}`);
@@ -807,22 +784,7 @@ function scrapePreviewData() {
                 }
             }
 
-            // Filler specifics
-            if (id === 'filler') {
-                const f = newData.counteragents[id];
-                if (f) {
-                    f.iin = document.getElementById(`prev-agent-bin-filler`)?.value || "";
-                    f.lastName = document.getElementById(`prev-agent-name-filler`)?.value || "";
-                    f.firstName = document.getElementById('prev-filler-firstName')?.value || "";
-                    f.patronymic = document.getElementById('prev-filler-patronymic')?.value || "";
 
-                    if (!f.powerOfAttorney) f.powerOfAttorney = { typeCode: "11004" };
-                    f.powerOfAttorney.docNumber = document.getElementById('prev-filler-poa-num')?.value || "";
-                    f.powerOfAttorney.docDate = document.getElementById('prev-filler-poa-date')?.value || "";
-                    f.powerOfAttorney.startDate = document.getElementById('prev-filler-poa-start')?.value || "";
-                    f.powerOfAttorney.endDate = document.getElementById('prev-filler-poa-end')?.value || "";
-                }
-            }
         }
     });
 

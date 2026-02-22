@@ -2,11 +2,9 @@ const API_HOST = window.location.origin;
 const PI_API = `${API_HOST}/api/v1/pideclaration`;
 const COUNTERAGENT_API = `${PI_API}/counteragent`;
 
-async function fetchTaxpayerInfo(bin, headers) {
-    const isBIN = bin.length === 12;
-    const endpoint = isBIN ? 'app-legal' : 'app-person';
+async function fetchTaxpayerInfo(bin, headers, type = 'app-legal') {
     try {
-        const resp = await fetch(`${API_HOST}/api/v1/auth/integration/${endpoint}/${bin}`, { headers });
+        const resp = await fetch(`${API_HOST}/api/v1/auth/integration/${type}/${bin}`, { headers });
         if (resp.ok) return await resp.json();
     } catch (e) {
         console.error(`Failed to fetch info for ${bin}:`, e);

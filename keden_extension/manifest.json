@@ -10,7 +10,7 @@
         "tabs"
     ],
     "host_permissions": [
-        "https://test-keden.kgd.gov.kz/*",
+        "https://keden.kgd.gov.kz/*",
         "https://pk.uchet.kz/*",
         "https://openrouter.ai/*",
         "http://localhost:3001/*"
@@ -25,7 +25,7 @@
     "content_scripts": [
         {
             "matches": [
-                "https://test-keden.kgd.gov.kz/*"
+                "https://keden.kgd.gov.kz/*"
             ],
             "js": [
                 "content/admin_auth.js",

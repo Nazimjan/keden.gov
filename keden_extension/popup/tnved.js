@@ -3,7 +3,7 @@
  * Validates TNVED codes against the official Keden classifier API.
  */
 
-const TNVED_API_BASE = 'https://test-keden.kgd.gov.kz/api/v1/cnfea/cnfea';
+const TNVED_API_BASE = 'https://keden.kgd.gov.kz/api/v1/cnfea/cnfea';
 
 /**
  * Validates a single TNVED code by querying the Keden API.

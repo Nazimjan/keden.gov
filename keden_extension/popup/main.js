@@ -12,7 +12,7 @@ let currentUserInfo = null; // Will store { iin, fio } after auth check
  */
 async function getKedenUserInfo() {
     try {
-        const tabs = await chrome.tabs.query({ url: "*://test-keden.kgd.gov.kz/*" });
+        const tabs = await chrome.tabs.query({ url: "*://keden.kgd.gov.kz/*" });
         const kedenTab = tabs.find(t => t.url && t.url.includes('keden.kgd.gov.kz'));
         if (!kedenTab) return null;
 
@@ -289,14 +289,17 @@ document.getElementById('confirmFillBtn').onclick = async () => {
 
     const scrapedData = scrapePreviewData();
     if (!scrapedData) return;
-
+    if (currentUserInfo && currentUserInfo.iin) {
+        if (!scrapedData.counteragents) scrapedData.counteragents = {};
+        scrapedData.counteragents.filler = { iin: currentUserInfo.iin };
+    }
     showLoading(true);
     setStatus('🚀 Заполнение ПИ...');
 
     try {
         let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab || !tab.url || !tab.url.includes('keden.kgd.gov.kz')) {
-            const tabs = await chrome.tabs.query({ url: "*://test-keden.kgd.gov.kz/*" });
+            const tabs = await chrome.tabs.query({ url: "*://keden.kgd.gov.kz/*" });
             const kedenTab = tabs.find(t => t.url && t.url.includes('keden.kgd.gov.kz'));
             if (kedenTab) tab = kedenTab;
             else throw new Error('Откройте вкладку Keden с ПИ декларацией');

@@ -1,4 +1,4 @@
-const OPENROUTER_API_KEY = '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';
+const OPENROUTER_API_KEY = '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';
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 // Гибридная стратегия:
@@ -213,7 +213,7 @@ async function analyzeFileAgent(filePart, fileName) {
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://test-keden.kgd.gov.kz',
+      'HTTP-Referer': 'https://keden.kgd.gov.kz',
       'X-Title': 'Keden AI Hybrid'
     },
     body: body
@@ -279,7 +279,7 @@ async function analyzeAllFilesAgent(fileParts, fileNames) {
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://test-keden.kgd.gov.kz',
+      'HTTP-Referer': 'https://keden.kgd.gov.kz',
       'X-Title': 'Keden AI Batch'
     },
     body: body
