@@ -173,25 +173,20 @@ function buildCounteragentPayload(source, extra) {
     if (source.nonResidentPerson !== undefined) payload.nonResidentPerson = source.nonResidentPerson;
 
     // Регистрационный документ - TЗ п.2.3
-    const regDoc = source.representativeCertificate || source.powerOfAttorney;
+    const regDoc = source.representativeCertificate;
     if (regDoc && regDoc.docNumber) {
-        const isPOA = source.powerOfAttorney !== undefined;
         payload.registerDocument = {
             docNumber: regDoc.docNumber,
             docDate: regDoc.docDate || null,
             startDate: regDoc.startDate || regDoc.docDate || null,
             endDate: regDoc.endDate || null,
-            documentType: isPOA ? {
-                id: 432, // ID will be updated dynamically in main.js
-                code: "09024",
-                ru: "Документ, подтверждающий полномочия лица, подающего таможенную декларацию"
-            } : {
+            documentType: {
                 id: 415,
                 code: "09011",
                 ru: "Документ, свидетельствующий о включении лица в Реестр уполномоченных экономических операторов"
             },
             country: COUNTRY_MAP["KZ"],
-            regKindCode: regDoc.regKindCode || null
+            regKindCode: regDoc.regKindCode || "1"
         };
     }
 

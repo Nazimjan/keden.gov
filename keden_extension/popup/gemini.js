@@ -1,9 +1,9 @@
 const OPENROUTER_API_KEY = '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';
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
-// Гибридная стратегия:
-const MODEL_VISION = "qwen/qwen3.5-plus-02-15"; // Для картинок и сканов
-const MODEL_TEXT = "minimax/minimax-m2.5";      // Для Excel и чистого текста
+// Стратегия:
+const MODEL_VISION = "qwen/qwen3.5-plus-02-15"; // Основная модель
+const MODEL_TEXT = "qwen/qwen3.5-plus-02-15";   // Теперь тоже Qwen
 
 // Retry configuration
 const MAX_RETRIES = 3;
@@ -184,162 +184,47 @@ function safeParseJSON(text) {
   }
 }
 
-/**
- * Агент для анализа ОДНОГО файла.
- * ГИБРИД: Qwen для зрения, MiniMax для текста.
- */
 async function analyzeFileAgent(filePart, fileName) {
-  const isVision = Array.isArray(filePart) ?
-    filePart.some(p => p.inlineData) :
-    (filePart && !!filePart.inlineData);
+  const iin = currentUserInfo && currentUserInfo.iin ? currentUserInfo.iin : '000000000000';
 
-  const promptText = `Анализируй файл "${fileName}".\n\n${FILE_AGENT_PROMPT}`;
-  const model = isVision ? MODEL_VISION : MODEL_TEXT;
-
-  console.log(`🤖 [${isVision ? 'Vision' : 'Text'}] Используем ${model} для: ${fileName}`);
-
-  const content = convertToOpenAIContent(filePart, promptText);
-
-  const body = JSON.stringify({
-    model: model,
-    messages: [{ role: "user", content: content }],
-    response_format: { type: "json_object" },
-    temperature: 0.1,
-    max_tokens: 8192
-  });
-
-  const data = await fetchWithRetry(OPENROUTER_URL, {
+  const response = await fetch('http://localhost:3001/api/v1/analyze-single', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://keden.kgd.gov.kz',
-      'X-Title': 'Keden AI Hybrid'
-    },
-    body: body
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ iin: iin, fileName: fileName, parts: Array.isArray(filePart) ? filePart : [filePart] })
   });
 
-  if (!data || !data.choices || !data.choices[0]) {
-    throw new Error('Некорректный ответ от API OpenRouter');
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || `Ошибка сервера: ${response.status}`);
   }
 
-  const resultText = data.choices[0].message.content;
-  const result = safeParseJSON(resultText);
+  const result = await response.json();
   result.filename = fileName;
   return result;
 }
 
 /**
  * Агент для ПАКЕТНОЙ обработки всех загруженных файлов разом.
- * Экономит токены на промпте и сразу делает кросс-валидацию силами ИИ.
+ * Отправляет запрос на наш локальный сервер
  */
 async function analyzeAllFilesAgent(fileParts, fileNames) {
-  // Определяем, есть ли картинки среди всех частей
-  const hasVision = fileParts.some(p =>
-    Array.isArray(p) ? p.some(x => x.inlineData) : !!p.inlineData
-  );
+  const iin = currentUserInfo && currentUserInfo.iin ? currentUserInfo.iin : '000000000000';
 
-  const model = hasVision ? MODEL_VISION : MODEL_TEXT;
-  console.log(`🤖 [Batch] Используем ${model} для ${fileParts.length} файлов:`, fileNames);
-
-  const prefixPrompt = `
-Ты — главный таможенный AI-эксперт. Тебе на вход передано СРАЗУ НЕСКОЛЬКО файлов (сканы, PDF, таблицы) по одной поставке: ${fileNames.join(", ")}.
-
-ТВОЯ ЗАДАЧА СДЕЛАТЬ КРОСС-СВЕРКУ (MERGE) ВСЕХ ДАННЫХ В ЕДИНУЮ ЗАПОЛНЕННУЮ ДЕКЛАРАЦИЮ.
-
-ПРАВИЛА КРОСС-СВЕРКИ:
-1. Если в разных документах (например, CMR и Инвойс) данные отличаются, выбери наиболее полные и точные.
-2. Для Товаров: возьми товары из Excel-инвойса или Упаковочного листа/Реестра. НЕ дублируй одинаковые списки из разных файлов.
-3. Формируй ЕДИНЫЙ итоговый JSON, который описывает всю эту поставку целиком.
-
-Базовые правила заполнения полей:
-`;
-
-  const promptText = prefixPrompt + FILE_AGENT_PROMPT;
-
-  // fileParts contains array of {text: ...} or {inlineData: ...}. We flatten them.
-  const flatParts = [];
-  fileParts.forEach(p => {
-    if (Array.isArray(p)) flatParts.push(...p);
-    else flatParts.push(p);
-  });
-
-  const content = convertToOpenAIContent(flatParts, promptText);
-
-  const body = JSON.stringify({
-    model: model,
-    messages: [{ role: "user", content: content }],
-    response_format: { type: "json_object" },
-    temperature: 0.1,
-    max_tokens: 8192
-  });
-
-  const data = await fetchWithRetry(OPENROUTER_URL, {
+  const response = await fetch('http://localhost:3001/api/v1/analyze-batch', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-      'HTTP-Referer': 'https://keden.kgd.gov.kz',
-      'X-Title': 'Keden AI Batch'
-    },
-    body: body
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ iin: iin, fileParts, fileNames })
   });
 
-  if (!data || !data.choices || !data.choices[0]) {
-    throw new Error('Некорректный ответ от API OpenRouter');
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.error || `Ошибка сервера: ${response.status}`);
   }
 
-  const resultText = data.choices[0].message.content;
-  const result = safeParseJSON(resultText);
-
-  // Теперь ИИ возвращает массив documents
-  let docTypesFound = [];
-
-  if (result.documents && Array.isArray(result.documents)) {
-    docTypesFound = result.documents.map(d => ({
-      filename: d.filename || d.name || "Объединенные данные",
-      type: d.type || 'OTHER',
-      number: d.number || '',
-      date: d.date || ''
-    }));
-  }
-
-  // Дополнительная валидация на случай, если ИИ по привычке вернет document
-  if (docTypesFound.length === 0 && result.document && result.document.type) {
-    docTypesFound.push({
-      filename: result.document.filename || "Объединенные данные",
-      type: result.document.type || 'OTHER',
-      number: result.document.number || '',
-      date: result.document.date || ''
-    });
-  }
+  const result = await response.json();
 
   // Обернем в формат, который ожидает renderPreview:
-  return {
-    documents: docTypesFound,
-    validation: { errors: [], warnings: [] },
-    mergedData: {
-      counteragents: {
-        consignor: result.consignor || { present: false },
-        consignee: result.consignee || { present: false },
-        carrier: result.carrier || { present: false },
-        declarant: result.declarant || { present: false },
-        filler: result.filler || { present: false, role: "FILLER_DECLARANT" }
-      },
-      vehicles: result.vehicles || {},
-      countries: result.countries || {},
-      products: result.products || [],
-      registry: result.registry || { number: '', date: '' },
-      driver: result.driver || { present: false }
-    }
-  };
-}
-
-/**
- * Объединяет результаты агентов
- */
-function mergeAgentResults(results) {
-  return mergeAgentResultsJS(results);
+  return result;
 }
 
 // Заглушки для legacy

@@ -1,6 +1,19 @@
-/**
- * KEDEN Extension - MAIN (Content Script Entry Point)
- */
+const VERSION = '1.2.0';
+
+// RUN AUTO-CHECK ON LOAD
+(async () => {
+    console.log(`[Keden] Extension v${VERSION} loaded`);
+    try {
+        const auth = await checkExtensionAccess();
+        if (auth && auth.allowed) {
+            console.log('[Keden] Welcome, ' + auth.fio + '. Credits remain: ' + (auth.credits || 0));
+        } else {
+            console.warn('[Keden] Access restricted:', auth?.message);
+        }
+    } catch (e) {
+        console.error('[Keden] Initialization auth check failed:', e);
+    }
+})();
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'GET_USER_INFO') {
@@ -88,8 +101,10 @@ async function fillCounteragents(params) {
 
             if (vehicleAtBorderData) {
                 // Сохраняем остальные поля декларации, меняем только транспорт в vehicleAtBorder
+                currentDecl.presentingPersonEqualCarrier = true; // ГАЛОЧКА: Совпадает с перевозчиком и представителем на границе
                 currentDecl.productsTransportation = {
                     ...currentDecl.productsTransportation,
+                    matchesVehicleAtBorder: true, // ГАЛОЧКА: ТС прибывающие совпадают с ТС при транзите
                     vehicleAtBorder: {
                         ...currentDecl.productsTransportation?.vehicleAtBorder,
                         ...vehicleAtBorderData
@@ -130,7 +145,7 @@ async function fillCounteragents(params) {
                         console.log('✅ Root vehicleType updated');
                     } else {
                         if (!currentDecl.productsTransportation) {
-                            currentDecl.productsTransportation = { containerTransportation: false, matchesVehicleAtBorder: false };
+                            currentDecl.productsTransportation = { containerTransportation: false, matchesVehicleAtBorder: true };
                         }
                         if (!currentDecl.productsTransportation.vehicleAtBorder) {
                             currentDecl.productsTransportation.vehicleAtBorder = { transportMeansQuantity: 0, vehicles: [], routePoints: [], multimodalitySign: false };
@@ -143,13 +158,36 @@ async function fillCounteragents(params) {
             }
 
             if (updated) {
+                currentDecl.presentingPersonEqualCarrier = true;
+                if (currentDecl.productsTransportation) {
+                    currentDecl.productsTransportation.matchesVehicleAtBorder = true;
+                }
                 await updatePIDeclaration(declId, currentDecl, headers);
                 console.log('✅ Declaration updated with Customs/Transport data');
             }
         } catch (err) {
             console.error('❌ Customs/Transport update failed:', err);
         }
+
+        // ОБРАБОТКА СРЕДСТВ ИДЕНТИФИКАЦИИ (Голочка "Без пломбы")
+        try {
+            console.log('🔗 DEBUG: Setting Customs Identification to "Without Seal"');
+            await updateCustomsIdentification(declId, headers);
+        } catch (identErr) {
+            console.error('❌ Customs Identification update failed:', identErr);
+        }
+
+        // ОБРАБОТКА ТАМОЖНИ НАЗНАЧЕНИЯ
+        try {
+            if (params.shipping && params.shipping.destCustomsCode) {
+                console.log('🔗 DEBUG: Updating Destination Customs Office:', params.shipping.destCustomsCode);
+                await updateDestinationCustomsOffice(declId, params.shipping.destCustomsCode, headers);
+            }
+        } catch (destErr) {
+            console.error('❌ Destination Customs update failed:', destErr);
+        }
     }
+
 
     const hasConsignmentAgents = Boolean(counteragents.consignor?.present || counteragents.consignee?.present);
     const hasProducts = Boolean(params.products && params.products.length > 0);
@@ -189,19 +227,26 @@ async function fillCounteragents(params) {
         console.log("Created Consignment ID:", consignmentId);
 
         // 2. Map Transport Document (Stage 1: create doc record)
-        // (as per TЗ 4.1: POST creates record and returns its id)
+        // STRICT RULE: This block in Consignment always refers to the Registry (09011)
         const docs = params.documents || [];
-        const typeToCode = { 'INVOICE': '04021', 'TRANSPORT_DOC': '02015', 'REGISTRY': '09011' };
-        let mainDoc = docs.find(d => typeToCode[d.type] === '02015' || d.type === '02015');
-        if (!mainDoc) mainDoc = docs.find(d => typeToCode[d.type] === '09011' || d.type === '09011');
+        const declarant = params.counteragents?.declarant;
+        let mainDoc = null;
 
-        // Fallback to registry info if no main doc found
-        if (!mainDoc && params.registry && params.registry.number) {
+        // Priority 1: Use registry from params or declarant's certificate (official data)
+        if (params.registry && params.registry.number) {
             mainDoc = { type: 'REGISTRY', number: params.registry.number, date: params.registry.date };
+        } else if (declarant && declarant.representativeCertificate && declarant.representativeCertificate.docNumber) {
+            mainDoc = {
+                type: 'REGISTRY',
+                number: declarant.representativeCertificate.docNumber,
+                date: declarant.representativeCertificate.docDate
+            };
+        } else {
+            mainDoc = docs.find(d => d.type === 'REGISTRY' || d.code === '09011' || d.type === '09011');
         }
 
         if (mainDoc) {
-            const docCode = typeToCode[mainDoc.type] || mainDoc.type;
+            const docCode = '09011'; // Optimized: always use 09011 here
             const docTypes = await fetchDocumentTypes(headers);
             const typeInfo = docTypes.find(t => t.code === docCode);
 
@@ -209,7 +254,8 @@ async function fillCounteragents(params) {
                 const docPayload = {
                     documentType: typeInfo,
                     docNumber: mainDoc.number || "Б/Н",
-                    docDate: formatToISODate(mainDoc.date) || new Date().toISOString().split('T')[0]
+                    docDate: formatToISODate(mainDoc.date) || new Date().toISOString().split('T')[0],
+                    regKindCode: docCode === '09011' ? "1" : null
                 };
 
                 console.log("📡 Creating Transport Document record (TЗ Stage 1)...");
@@ -483,19 +529,25 @@ async function fillCounteragents(params) {
             }
 
             if (carrierId) {
-                console.log('👤 DEBUG: Adding driver to carrier', carrierId);
+                console.log('👤 DEBUG: Processing carrier representative and transit copy', carrierId);
                 try {
+                    // 1. Сначала добавляем водителя к самому перевозчику (на границе)
                     const driverPayload = buildDriverPayload(params.driver, carrierId);
                     if (driverPayload) {
                         await postRepresentative(driverPayload, headers);
-                        console.log('✅ Driver added successfully');
+                        console.log('✅ Driver added to carrier');
                     }
-                } catch (driverErr) {
-                    console.error('❌ Driver add failed:', driverErr);
-                    // Продолжаем работу, даже если водитель не добавился
+
+                    // 2. И только ПОТОМ копируем его в раздел Транзит (ГАЛОЧКА: Совпадает с перевозчиком)
+                    // Это гарантирует, что водитель тоже скопируется в новый раздел
+                    await copyCounteragent(carrierId, declId, 'PRELIMINARY', 'TRANSPORTER', headers);
+                    console.log('✅ Carrier (with driver) copied to transporter section');
+
+                } catch (err) {
+                    console.error('❌ Carrier/Driver automation failed:', err);
                 }
             } else {
-                console.warn('⚠️ Warning: Carrier ID not found in response, skipping driver.');
+                console.warn('⚠️ Warning: Carrier ID not found in response, skipping copy/driver.');
             }
         }
 
@@ -511,11 +563,18 @@ async function fillCounteragents(params) {
         console.log('📦 DEBUG: Importing products');
         try {
             const productsPayload = mapProductsPayload(params.products);
-            const importedProducts = await importProducts(consignmentId, productsPayload, headers);
+            let importedProducts = await importProducts(consignmentId, productsPayload, headers);
+
+            // Если API вернуло пусто (иногда бывает при 200 OK), пробуем получить список товаров по ID партии
+            if (!Array.isArray(importedProducts) || importedProducts.length === 0) {
+                console.log('ℹ️ Product import response empty, fetching from server...');
+                importedProducts = await getProducts(consignmentId, headers);
+            }
+
             if (Array.isArray(importedProducts)) {
                 createdProductIds = importedProducts.map(p => p.id);
             }
-            console.log('✅ Products imported successfully', createdProductIds);
+            console.log('✅ Products processed:', createdProductIds.length);
         } catch (prodErr) {
             console.error('❌ Product import failed:', prodErr);
             alert("Ошибка при импорте товаров: " + prodErr.message);
@@ -525,39 +584,42 @@ async function fillCounteragents(params) {
     // ОБРАБОТКА ДОКУМЕНТОВ 44 ГРАФЫ (Box 44 Automation)
     await processBox44Documents(consignmentId, params, createdProductIds, headers);
 
-    // ОБРАБОТКА ФАЙЛА РЕЕСТРА (Legacy/Manual Upload support)
-    if (params.registryDocument && params.registryDocument.fileBase64 && consignmentId) {
-        // ... (existing registry document logic refined in processBox44)
-    }
-
-    alert("Данные успешно отправлены. Страница будет перезагружена.");
+    alert("Данные успешно отправлены.");
     window.location.reload();
 }
 
 async function processBox44Documents(consignmentId, params, productIds, headers) {
     console.log('📑 DEBUG: Automating Box 44 Documents');
 
-    // Combine documents from Gemini analysis and mergedData
     const docsToCreate = [];
+    const rawFiles = params.rawFiles || [];
 
-    // Docs from analysis
+    // Combine documents from Gemini analysis
     if (params.documents && Array.isArray(params.documents)) {
         params.documents.forEach(d => {
-            let code = d.type; // По умолчанию считаем, что это код (из UI)
+            let code = null;
 
-            // Если это старый формат (слово), маппим его
-            if (d.type === 'INVOICE') code = '04021';
-            else if (d.type === 'TRANSPORT_DOC') code = '02015';
-            else if (d.type === 'REGISTRY') code = '09011';
-            else if (d.type === 'POWER_OF_ATTORNEY') code = '09024';
-            else if (d.type === 'OTHER') code = '11005';
+            // Если тип уже является кодом (5 цифр)
+            if (d.type && d.type.match(/^\d{5}$/)) {
+                code = d.type;
+            } else {
+                // Маппинг ключевых слов в коды
+                if (d.type === 'INVOICE') code = '04021';
+                else if (d.type === 'TRANSPORT_DOC') code = '02015';
+                else if (d.type === 'REGISTRY') code = '09011';
+                else if (d.type === 'VEHICLE_PERMIT') code = '09024';
+                else if (['DRIVER_ID', 'POWER_OF_ATTORNEY', 'VEHICLE_DOC'].includes(d.type)) code = '10022';
+                else if (d.type === 'PACKING_LIST') code = '04131';
+                else if (d.type === 'CONTRACT_TRANSPORT') code = '04033';
+                else if (d.type === 'CONTRACT') code = '11005';
+                else if (d.type === 'OTHER') code = '11005';
+            }
 
-            // Если код пустой или '00000', пропускаем (или можно сделать обработку 'Другое')
-            if (code && code !== '00000') {
+            if (code) {
                 docsToCreate.push({
                     code: code,
                     number: d.number || "Б/Н",
-                    date: d.date || new Date().toISOString().split('T')[0],
+                    date: d.date || "Б/Д",
                     name: d.type,
                     filename: d.filename
                 });
@@ -565,15 +627,25 @@ async function processBox44Documents(consignmentId, params, productIds, headers)
         });
     }
 
-    // Registry from mergedData
-    if (params.registry && params.registry.number) {
-        // Avoid duplicates if already in documents array
-        if (!docsToCreate.some(d => d.code === '09011')) {
+    // РЕЕСТР: Если его нет в списке документов, но он есть в данных - добавляем
+    if (!docsToCreate.some(d => d.code === '09011') && params.registry && params.registry.number) {
+        docsToCreate.push({
+            code: '09011',
+            number: params.registry.number,
+            date: params.registry.date || "Б/Д",
+            name: 'РЕЕСТР'
+        });
+    }
+
+    // УПАКОВОЧНЫЙ ЛИСТ (04131): Если нет, прикладываем инвойс вместо него
+    if (!docsToCreate.some(d => d.code === '04131')) {
+        const inv = docsToCreate.find(d => d.code === '04021');
+        if (inv) {
+            console.log('ℹ️ Packing list absent, using invoice as fallback for 04131');
             docsToCreate.push({
-                code: '09011',
-                number: params.registry.number,
-                date: params.registry.date || new Date().toISOString().split('T')[0],
-                name: 'РЕЕСТР'
+                ...inv,
+                code: '04131',
+                name: 'PACKING_LIST_FALLBACK'
             });
         }
     }
@@ -582,7 +654,6 @@ async function processBox44Documents(consignmentId, params, productIds, headers)
 
     try {
         const docTypes = await fetchDocumentTypes(headers);
-        const rawFiles = params.rawFiles || [];
 
         for (const doc of docsToCreate) {
             const typeInfo = docTypes.find(t => t.code === doc.code);
@@ -594,38 +665,32 @@ async function processBox44Documents(consignmentId, params, productIds, headers)
             let attachedFiles = [];
 
             // Пытаемся найти файл и загрузить его, если он не таблица
-            const matchingFile = rawFiles.find(f => f.name === doc.filename);
+            const matchingFile = rawFiles.find(f => f.name.toLowerCase() === (doc.filename || "").toLowerCase());
             if (matchingFile && matchingFile.base64) {
                 const isSpreadsheet = /\.(xlsx|xls|csv)$/i.test(matchingFile.name);
                 if (!isSpreadsheet) {
-                    // Avoid double-uploading if this is already the Transport Document record we created in Step 2
-                    const isMainTransportDoc = (doc.code === '02015' || doc.code === '09011');
-                    if (isMainTransportDoc) {
-                        console.log(`ℹ️ Skipping Box 44 upload for main transport doc ${doc.filename} (already handled)`);
-                        continue;
-                    }
-
-                    console.log(`📤 Uploading file for Box 44: ${matchingFile.name}`);
+                    console.log(`📤 Uploading file for Box 44: ${matchingFile.name} (Doc ${doc.code})`);
                     try {
                         const blob = base64ToBlob(matchingFile.base64, matchingFile.mimeType);
                         const fileObj = new File([blob], matchingFile.name, { type: matchingFile.mimeType });
                         const uploadResp = await uploadFile(fileObj, headers);
                         if (uploadResp && uploadResp[0]) {
                             attachedFiles = [uploadResp[0]];
-                            console.log(`✅ File attached to doc ${doc.code}`);
+                            console.log(`✅ File attached successfully`);
                         }
                     } catch (uploadErr) {
                         console.error(`❌ Failed to upload ${matchingFile.name}:`, uploadErr);
                     }
                 } else {
-                    console.log(`ℹ️ Skipping spreadsheet upload for ${matchingFile.name} (Keden only accepts PDF/JPG)`);
+                    console.log(`ℹ️ Skipping spreadsheet upload for ${matchingFile.name} (not supported by Keden)`);
                 }
             }
 
             const docPayload = {
                 documentType: typeInfo,
                 docNumber: doc.number,
-                docDate: doc.date,
+                docDate: doc.date === "Б/Д" ? null : formatToISODate(doc.date),
+                regKindCode: doc.code === '09011' ? "1" : null,
                 files: attachedFiles
             };
 
@@ -658,7 +723,3 @@ function base64ToBlob(base64, mimeType) {
     return new Blob(byteArrays, { type: mimeType });
 }
 
-function setStatusUI(text) {
-    // Helper to log or show status if we had a global UI handler here
-    console.log(`[STATUS]: ${text}`);
-}

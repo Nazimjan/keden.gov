@@ -13,21 +13,31 @@ const ADMIN_API_BASE = 'http://localhost:3001';
 function extractKedenUserInfo() {
     try {
         const authStorage = localStorage.getItem('auth-storage');
-        if (!authStorage) return null;
+        if (!authStorage) {
+            console.warn('[Admin Auth] auth-storage not found in localStorage');
+            return null;
+        }
 
         const state = JSON.parse(authStorage).state;
-        if (!state || !state.token) return null;
+        if (!state) return null;
 
         let iin = '';
         let fio = '';
+        let token = '';
 
-        // Method 1: Decode JWT payload
-        const accessToken = state.token.access_token;
-        if (accessToken) {
+        // Try to find token in state.token or state.user.token
+        if (state.token) {
+            token = typeof state.token === 'string' ? state.token : (state.token.access_token || state.token.id_token || '');
+        }
+        if (!token && state.user && state.user.token) {
+            token = state.user.token;
+        }
+
+        // Method 1: Decode JWT payload if we found a token
+        if (token && token.includes('.')) {
             try {
-                const parts = accessToken.split('.');
+                const parts = token.split('.');
                 if (parts.length === 3) {
-                    // Correctly decode UTF-8 from Base64
                     const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
                     const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
                         return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
@@ -41,9 +51,9 @@ function extractKedenUserInfo() {
             }
         }
 
-        // Method 2: Fallback to state.user
-        if (!iin && state.user) {
-            iin = state.user.iin || state.user.username || '';
+        // Method 2: Fallback to state.user data (Keden often stores it here)
+        if (state.user) {
+            iin = iin || state.user.iin || state.user.username || '';
             fio = fio || state.user.fullName || state.user.name || '';
         }
 
@@ -54,9 +64,13 @@ function extractKedenUserInfo() {
             fio = fio || [ud.lastName, ud.firstName, ud.middleName].filter(Boolean).join(' ');
         }
 
-        if (!iin) return null;
+        if (!iin && !token) return null;
 
-        return { iin, fio: fio || iin };
+        return {
+            iin: iin || 'unknown',
+            fio: fio || iin || 'Пользователь',
+            token: token
+        };
     } catch (e) {
         console.error('[Admin Auth] Failed to extract user info:', e);
         return null;
@@ -68,18 +82,20 @@ function extractKedenUserInfo() {
  */
 async function checkExtensionAccess() {
     const userInfo = extractKedenUserInfo();
-    if (!userInfo || !userInfo.iin) {
-        return { allowed: false, message: 'Не удалось определить пользователя ИС Кеден. Убедитесь что вы авторизованы в системе.', userInfo: null };
+    if (!userInfo || !userInfo.token) {
+        return { allowed: false, message: 'Не удалось определить сессию Кедена. Убедитесь что вы авторизованы в ИС Кеден.', userInfo: null };
     }
 
     try {
+        console.log('[Admin Auth] Checking access at:', `${ADMIN_API_BASE}/api/ext/auth`);
         const resp = await fetch(`${ADMIN_API_BASE}/api/ext/auth`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ iin: userInfo.iin, fio: userInfo.fio })
+            body: JSON.stringify({ token: userInfo.token })
         });
 
         const data = await resp.json();
+        console.log('[Admin Auth] Server response:', data);
         return { ...data, userInfo };
     } catch (e) {
         console.error('[Admin Auth] Backend unreachable:', e);

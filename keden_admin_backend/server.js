@@ -1,15 +1,85 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const db = require('./db');
 
-const app = express();
-const PORT = 3001;
-const JWT_SECRET = 'keden-admin-secret-key-2026';
+const { handleExtract } = require('./controllers/extract.controller');
 
-app.use(cors());
-app.use(express.json());
+const app = express();
+const PORT = process.env.PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET || 'keden-admin-secret-key-2026';
+
+// ── SECURITY: RATE LIMITING ──────────────────────────────────────────────────
+const rateLimit = require('express-rate-limit');
+
+// Общий лимит на все API
+const globalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 минут
+    max: 100, // максимум 100 запросов с одного IP
+    message: { error: 'Too many requests, please try again later.' }
+});
+
+// Строгий лимит на авторизацию (защита от брутфорса и спам-регистраций)
+const authLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, // 1 минута
+    max: 5, // максимум 5 попыток в минуту
+    message: { error: 'Too many attempts, please slow down.' }
+});
+
+// Лимит на тяжелые операции (AI Extractions)
+const extractLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20, // 20 экстракций в 15 минут
+    message: { error: 'Extract limit reached. Please wait.' }
+});
+
+app.use(globalLimiter);
+
+// ── SECURITY: CORS ───────────────────────────────────────────────────────────
+const corsOptions = {
+    origin: function (origin, callback) {
+        // Разрешаем запросы только от расширения и (опционально) самого сервера для админки
+        const allowedOrigins = [
+            /^chrome-extension:\/\//, // Регулярка для расширений Chrome
+            'http://localhost:3001',
+            'http://localhost:3000',
+            'http://localhost:5173',
+            'http://127.0.0.1:5173'
+        ];
+
+        if (!origin || allowedOrigins.some(pattern =>
+            typeof pattern === 'string' ? pattern === origin : pattern.test(origin)
+        )) {
+            callback(null, true);
+        } else {
+            console.warn(`[CORS] Rejected origin: ${origin}`);
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept']
+};
+
+app.use(cors(corsOptions));
+
+// Лимит уменьшен до безопасного уровня (2МБ), так как сканы теперь идут через multipart/form-data
+app.use(express.json({ limit: '2mb' }));
+
+const multer = require('multer');
+const os = require('os');
+const upload = multer({ dest: os.tmpdir() }); // Сохраняем во временную папку ОС
+
+// Логгер запросов для отладки
+app.use((req, res, next) => {
+    if (req.path === '/api/v1/extract') {
+        console.log(`[REQ] ${req.method} ${req.path} - Body size: ${JSON.stringify(req.body).length} bytes`);
+    } else {
+        console.log(`[REQ] ${req.method} ${req.path}`);
+    }
+    next();
+});
 
 // ============================================================
 // Middleware: Admin JWT Auth
@@ -137,52 +207,134 @@ app.get('/api/admin/stats', adminAuth, (req, res) => {
 });
 
 // ============================================================
-// EXTENSION API: Auth check
+// EXTENSION API: Auth check (JWT-based Auto-registration)
 // ============================================================
-app.post('/api/ext/auth', (req, res) => {
-    const { iin, fio } = req.body;
-    if (!iin) return res.status(400).json({ allowed: false, error: 'ИИН обязателен' });
+app.post('/api/ext/auth', authLimiter, (req, res) => {
+    const { token } = req.body;
 
-    let user = db.getUserByIin(iin);
+    if (!token) {
+        return res.status(400).json({ error: 'JWT token required' });
+    }
 
-    // Auto-register new users on first extension launch
-    if (!user) {
-        try {
-            user = db.addUser(iin, fio || iin);
-            console.log(`[Auto-register] New user: ${iin} - ${fio}`);
-        } catch (e) {
-            return res.json({ allowed: false, message: 'Ошибка регистрации: ' + e.message });
+    try {
+        // Декодируем токен Кедена (без проверки подписи)
+        const decoded = jwt.decode(token);
+
+        if (!decoded || !decoded.iin) {
+            return res.status(401).json({ error: 'Invalid Keden session' });
         }
-    }
 
-    if (!user.is_allowed) {
-        return res.json({ allowed: false, message: 'Доступ заблокирован администратором.' });
-    }
+        // Проверка срока жизни токена
+        const now = Math.floor(Date.now() / 1000);
+        if (decoded.exp && decoded.exp < now) {
+            return res.status(401).json({ error: 'Keden session expired' });
+        }
 
-    const now = new Date();
-    let hasSubscription = false;
-    if (user.subscription_end && new Date(user.subscription_end) > now) {
-        hasSubscription = true;
-    }
+        const iin = decoded.iin;
+        const fio = decoded.fullName || decoded.name || iin;
 
-    if (!hasSubscription && user.credits <= 0) {
-        return res.json({ allowed: false, message: 'Доступ закрыт: истекла подписка или закончились кредиты.', user: { iin: user.iin, fio: user.fio, status: 'expired' } });
-    }
+        // Авто-регистрация (Upsert)
+        const user = db.upsertUser(iin, fio);
 
-    // Update last_active and fio if changed
-    db.updateUser(user.id, { last_active: now.toISOString(), fio: fio || user.fio });
+        if (!user || user.is_allowed === 0) {
+            return res.status(403).json({
+                allowed: false,
+                message: 'Ваш доступ заблокирован или ожидает подтверждения администратором.'
+            });
+        }
 
-    res.json({
-        allowed: true,
-        user: {
+        res.json({
+            allowed: true,
             iin: user.iin,
             fio: user.fio,
-            hasSubscription,
-            subscription_end: user.subscription_end,
-            credits: user.credits
-        }
-    });
+            credits: user.credits,
+            subscription_end: user.subscription_end
+        });
+
+    } catch (e) {
+        console.error('Auth Error:', e);
+        res.status(500).json({ error: 'Internal server error during authentication' });
+    }
 });
+
+// ============================================================
+// EXTENSION API: AI Extract (SSE)
+// ============================================================
+app.post('/api/v1/extract', extractLimiter, upload.any(), handleExtract);
+
+/**
+ * Эндпоинт для анализа ОДИНОЧНОГО файла (для режима максимальной скорости)
+ */
+app.post('/api/v1/analyze-single', async (req, res) => {
+    const { iin, fileName, parts } = req.body;
+    if (!iin || !parts) return res.status(400).json({ error: 'Missing data' });
+
+    try {
+        const { analyzeFile } = require('./services/ai.service');
+        const db = require('./db');
+
+        const user = db.getUserByIin(iin);
+        if (!user || (!user.subscription_end && user.credits <= 0)) {
+            return res.status(403).json({ error: 'No credits' });
+        }
+
+        console.log(`[AI-Single] Starting: ${fileName} for ${iin}`);
+        const result = await analyzeFile(parts, fileName);
+        res.json(result);
+    } catch (err) {
+        console.error(`[AI-Single] Error ${fileName}:`, err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * Эндпоинт для пакетного анализа (как работало старое стабильное расширение)
+ */
+app.post('/api/v1/analyze-batch', async (req, res) => {
+    const { iin, fileParts, fileNames } = req.body;
+    if (!iin || !fileParts || !fileNames) return res.status(400).json({ error: 'Missing data' });
+
+    try {
+        const { analyzeAllFiles } = require('./services/ai.service');
+        const db = require('./db');
+
+        const user = db.getUserByIin(iin);
+        if (!user || (!user.subscription_end && user.credits <= 0)) {
+            return res.status(403).json({ error: 'No credits' });
+        }
+
+        console.log(`[AI-Batch] Processing ${fileParts.length} files for ${iin}`);
+
+        // analyzeAllFiles(fileParts, fileNames, onStatus)
+        const result = await analyzeAllFiles(fileParts, fileNames, (msg) => {
+            console.log(`[AI-Batch Status] ${msg}`);
+        });
+
+        res.json(result);
+    } catch (err) {
+        console.error(`[AI-Batch] Error:`, err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+/**
+ * Эндпоинт для слияния массива результатов в финальный объект ПИ
+ */
+app.post('/api/v1/merge', async (req, res) => {
+    const { results } = req.body;
+    if (!Array.isArray(results)) return res.status(400).json({ error: 'Expected array of results' });
+
+    try {
+        const { mergeAgentResultsJS } = require('./services/merger');
+        const finalData = mergeAgentResultsJS(results);
+        res.json(finalData);
+    } catch (err) {
+        console.error(`[Merge] Error:`, err.message);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// ============================================================
 
 // ============================================================
 // EXTENSION API: Log action

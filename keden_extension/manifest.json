@@ -2,9 +2,11 @@
     "manifest_version": 3,
     "name": "Keden PI Autofill Premium",
     "version": "1.0",
-    "description": "AI-powered PI declaration filler using Qwen 3.5 & MiniMax",
+    "description": "AI-powered PI declaration filler using Qwen 3.5",
     "permissions": [
         "storage",
+        "unlimitedStorage",
+        "alarms",
         "activeTab",
         "scripting",
         "tabs"
@@ -12,7 +14,6 @@
     "host_permissions": [
         "https://keden.kgd.gov.kz/*",
         "https://pk.uchet.kz/*",
-        "https://openrouter.ai/*",
         "http://localhost:3001/*"
     ],
     "action": {
@@ -21,6 +22,9 @@
     },
     "icons": {
         "128": "icon.png"
+    },
+    "background": {
+        "service_worker": "background.js"
     },
     "content_scripts": [
         {

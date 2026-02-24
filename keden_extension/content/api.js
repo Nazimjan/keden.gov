@@ -2,6 +2,34 @@ const API_HOST = window.location.origin;
 const PI_API = `${API_HOST}/api/v1/pideclaration`;
 const COUNTERAGENT_API = `${PI_API}/counteragent`;
 
+// Прокси для запросов из Popup (чтобы использовать авторизацию страницы)
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (request.type === 'proxy_tnved') {
+        const token = localStorage.getItem('token') ||
+            localStorage.getItem('access_token') ||
+            localStorage.getItem('id_token') ||
+            sessionStorage.getItem('token');
+
+        fetch(`https://keden.kgd.gov.kz/api/v1/cnfea/cnfea?cnfeaCode=${request.code}&page=0&pageSize=5`, {
+            headers: {
+                'Authorization': token ? (token.startsWith('Bearer') ? token : `Bearer ${token}`) : '',
+                'Accept': 'application/json'
+            }
+        })
+            .then(async r => {
+                const text = await r.text();
+                if (!r.ok) throw new Error(`API Error ${r.status}: ${text}`);
+                return JSON.parse(text);
+            })
+            .then(data => sendResponse({ success: true, data }))
+            .catch(err => {
+                console.error("[Keden Extension] TNVED Proxy Error:", err);
+                sendResponse({ success: false, error: err.message });
+            });
+        return true;
+    }
+});
+
 async function fetchTaxpayerInfo(bin, headers, type = 'app-legal') {
     try {
         const resp = await fetch(`${API_HOST}/api/v1/auth/integration/${type}/${bin}`, { headers });
@@ -320,4 +348,148 @@ async function postDocumentMapping(documentId, productIds, headers) {
         throw new Error(`Ошибка привязки документа: ${errorText}`);
     }
     return true;
+}
+
+async function getProducts(consignmentId, headers) {
+    const url = `${PI_API}/product?consignmentId=${consignmentId}&pageSize=1000`;
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return data.results || [];
+}
+
+async function copyCounteragent(sourceId, targetId, headers) {
+    const url = `${PI_API}/counteragent/${sourceId}/copy?targetId=${targetId}&targetType=PRELIMINARY&toType=TRANSPORTER&carrierEqualIndicator=true`;
+    const resp = await fetch(url, {
+        method: 'PATCH',
+        headers
+    });
+
+    if (!resp.ok) {
+        const err = await resp.text();
+        console.error("Counteragent Copy failed:", err);
+        throw new Error("Не удалось скопировать перевозчика: " + err);
+    }
+    return true;
+}
+
+async function updateCustomsIdentification(declId, headers) {
+    // 1. Сначала пробуем получить текущий ID записи идентификации (если она есть)
+    const getUrl = `${PI_API}/customs-identification/preliminary/${declId}`;
+    let existingId = null;
+    try {
+        const resp = await fetch(getUrl, { headers });
+        if (resp.ok) {
+            const data = await resp.json();
+            existingId = data.id;
+        }
+    } catch (e) {
+        console.log("ℹ️ No existing identification record found");
+    }
+
+    // 2. Отправляем обновление с флагом "Без пломбы"
+    const url = `${PI_API}/customs-identification/preliminary/${declId}`;
+    const payload = {
+        id: existingId,
+        targetId: declId,
+        identificationMeans: [],
+        withoutIdentification: true
+    };
+
+    const method = existingId ? 'PUT' : 'POST';
+    const resp = await fetch(url, {
+        method: method,
+        headers,
+        body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+        const err = await resp.text();
+        console.error("Customs Identification update failed:", err);
+    } else {
+        console.log("✅ Customs Identification set to 'Without Seal'");
+    }
+}
+
+/**
+ * Updates the Destination Customs Office (Таможня назначения)
+ */
+async function updateDestinationCustomsOffice(declId, customsCode, headers) {
+    if (!customsCode) return;
+
+    // 1. Получаем детали таможенного поста по коду
+    const customsPost = await fetchCustomsByCode(customsCode, headers);
+    if (!customsPost) {
+        console.warn(`[API] Destination customs post not found for code: ${customsCode}`);
+        return;
+    }
+
+    // 2. Проверяем наличие существующей записи
+    const getUrl = `${PI_API}/destination-custom-office?targetType=PRELIMINARY&targetId=${declId}`;
+    let existingRecord = null;
+    try {
+        const getResp = await fetch(getUrl, { headers });
+        if (getResp.ok) {
+            const list = await getResp.json();
+            if (Array.isArray(list) && list.length > 0) {
+                existingRecord = list[0];
+            } else if (list && !Array.isArray(list) && list.id) {
+                existingRecord = list;
+            }
+        }
+    } catch (e) {
+        console.log("ℹ️ Error checking existing destination customs record:", e);
+    }
+
+    // 3. Подготавливаем payload
+    const payload = {
+        id: existingRecord ? existingRecord.id : null,
+        targetType: "PRELIMINARY",
+        targetId: declId,
+        customsPost: customsPost,
+        customsControlZone: null,
+        railwayStation: null,
+        address: null,
+        document: null,
+        destinationAeo: false,
+        indexOrder: null
+    };
+
+    const method = existingRecord ? 'PUT' : 'POST';
+    const url = `${PI_API}/destination-custom-office`;
+
+    const resp = await fetch(url, {
+        method,
+        headers,
+        body: JSON.stringify(payload)
+    });
+
+    if (!resp.ok) {
+        const err = await resp.text();
+        console.error("Destination Customs Update failed:", err);
+    } else {
+        console.log(`✅ Destination Customs Office updated (${method})`);
+    }
+}
+
+async function getCounteragents(targetId, targetType, type, headers) {
+    const url = `${PI_API}/counteragent?targetId=${targetId}&targetType=${targetType}&type=${type}`;
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) return [];
+    return await resp.json();
+}
+
+async function copyCounteragent(sourceId, targetId, targetType, toType, headers) {
+    const url = `${PI_API}/counteragent/${sourceId}/copy?targetId=${targetId}&targetType=${targetType}&toType=${toType}&carrierEqualIndicator=true`;
+    const resp = await fetch(url, {
+        method: 'POST',
+        headers
+    });
+    return resp.ok;
+}
+async function getCounteragent(id, headers) {
+    const url = `${PI_API}/counteragent/${id}`;
+    const resp = await fetch(url, { headers });
+    if (!resp.ok) return null;
+    return await resp.json();
 }

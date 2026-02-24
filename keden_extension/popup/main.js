@@ -25,13 +25,19 @@ async function getKedenUserInfo() {
                     const state = JSON.parse(authStorage).state;
                     if (!state || !state.token) return null;
 
-                    let iin = '', fio = '';
-                    const accessToken = state.token.access_token;
-                    if (accessToken) {
+                    let iin = '', fio = '', token = '';
+
+                    if (state.token) {
+                        token = typeof state.token === 'string' ? state.token : (state.token.access_token || state.token.id_token || '');
+                    }
+                    if (!token && state.user && state.user.token) {
+                        token = state.user.token;
+                    }
+
+                    if (token && token.includes('.')) {
                         try {
-                            const parts = accessToken.split('.');
+                            const parts = token.split('.');
                             if (parts.length === 3) {
-                                // Correctly decode UTF-8 from Base64
                                 const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
                                 const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
                                     return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
@@ -51,9 +57,9 @@ async function getKedenUserInfo() {
                         const ud = state.userAccountData;
                         fio = fio || [ud.lastName, ud.firstName, ud.middleName].filter(Boolean).join(' ');
                     }
-                    if (!iin) return null;
-                    return { iin, fio: fio || iin };
-                } catch (e) { return null; }
+                    if (!iin && !token) return null;
+                    return { iin: iin || 'unknown', fio: fio || 'Пользователь', token: token };
+                } catch (e) { return { error: e.message }; }
             }
         });
 
@@ -69,7 +75,7 @@ async function getKedenUserInfo() {
  */
 async function checkAdminAuth() {
     const userInfo = await getKedenUserInfo();
-    if (!userInfo || !userInfo.iin) {
+    if (!userInfo || !userInfo.token) {
         return { allowed: false, message: 'Не удалось определить пользователя ИС Кеден. Откройте страницу Keden и авторизуйтесь.', userInfo: null };
     }
 
@@ -77,7 +83,7 @@ async function checkAdminAuth() {
         const resp = await fetch(`${ADMIN_API}/api/ext/auth`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ iin: userInfo.iin, fio: userInfo.fio })
+            body: JSON.stringify({ token: userInfo.token })
         });
         const data = await resp.json();
         return { ...data, userInfo };
@@ -152,11 +158,78 @@ function showAccessDenied(message) {
         authStatusDiv.style.display = 'block';
     }
 
+    // Register state listener for background process
+    chrome.storage.onChanged.addListener((changes, area) => {
+        if (area === 'local' && changes.extractionState) {
+            handleStateUpdate(changes.extractionState.newValue);
+        }
+    });
+
+    // Initial state check
+    const { extractionState } = await chrome.storage.local.get('extractionState');
+    if (extractionState) {
+        // Если статус висит в PROCESSING более 5 минут — считаем его зависшим и сбрасываем
+        const now = Date.now();
+        const isStuck = extractionState.status === 'PROCESSING' &&
+            extractionState.timestamp &&
+            (now - extractionState.timestamp > 300000); // 5 минут
+
+        if (isStuck) {
+            console.log('[Init] Detected stuck extraction state, resetting...');
+            chrome.runtime.sendMessage({ action: 'RESET_STATE' });
+        } else {
+            handleStateUpdate(extractionState);
+        }
+    }
+
     // Log successful auth check
     if (!result.offline) {
         sendAdminLog('AUTH_CHECK', 'Расширение открыто');
     }
 })();
+
+/**
+ * Handle state changes from background process
+ */
+function handleStateUpdate(state) {
+    if (!state) return;
+
+    if (state.status === 'PROCESSING') {
+        showLoading(true);
+        setStatus(state.progressMessage || 'Обработка документов...');
+    } else if (state.status === 'SUCCESS') {
+        showLoading(false);
+        if (state.result) {
+            renderPreview(state.result);
+            setStatus(state.progressMessage || '✅ Анализ завершен');
+        }
+    } else if (state.status === 'ERROR') {
+        showLoading(false);
+        setStatus('❌ ' + (state.error || 'Произошла ошибка'));
+    } else if (state.status === 'IDLE') {
+        showLoading(false);
+        // Do not clear status if we have files selected
+        if (!window.appExtensionFiles || window.appExtensionFiles.length === 0) {
+            setStatus('');
+        }
+    }
+}
+
+document.getElementById('resetBtn').onclick = () => {
+    chrome.runtime.sendMessage({ action: 'RESET_STATE' });
+    window.appExtensionFiles = [];
+    if (typeof renderFileList === 'function') renderFileList();
+    if (typeof setStatus === 'function') setStatus('');
+    if (typeof showLoading === 'function') showLoading(false);
+
+    // Hide preview and validation if open
+    const previewArea = document.getElementById('previewArea');
+    if (previewArea) previewArea.style.display = 'none';
+    const mainContainer = document.getElementById('mainContainer');
+    if (mainContainer) mainContainer.classList.remove('expanded');
+    const validationSummary = document.getElementById('validationSummary');
+    if (validationSummary) validationSummary.innerHTML = '';
+};
 
 document.getElementById('openTabBtn').onclick = () => {
     logButtonClick('openTabBtn');
@@ -204,7 +277,7 @@ document.getElementById('startBtn').onclick = async () => {
                         filePart = await renderPDFPagesAsImages(file, 5); // рендерим первые 5 страниц
                     }
                 } else if (isExcel) {
-                    console.log(`📊 ${file.name}: Excel, отправляем в MiniMax...`);
+                    console.log(`📊 ${file.name}: Excel, отправляем в Qwen...`);
                     const text = await readExcel(file);
                     if (!text || text.length < 10) {
                         throw new Error("Файл Excel пустой или не читается");
@@ -231,41 +304,33 @@ document.getElementById('startBtn').onclick = async () => {
         }
 
         // =====================================================
-        // ФАЗА 2: Анализ всех файлов единым запросом (Batching)
+        // ФАЗА 2: Передача в Background для SSE (Transport Layer v2)
         // =====================================================
-        setStatus(`🤖 Отправка ${files.length} файлов единым пакетом для анализа...`);
+        setStatus(`🚀 Передача ${files.length} файлов в фоновый поток...`);
 
-        const allParts = fileJobs.map(job => job.filePart);
-        const fileNames = fileJobs.map(job => job.file.name);
-
-        let finalData;
-        try {
-            finalData = await analyzeAllFilesAgent(allParts, fileNames);
-        } catch (err) {
-            throw new Error(`Ошибка пакетного анализа: ${err.message}`);
+        // Нам нужно знать ID текущей вкладки, чтобы background мог отправить туда FILL_PI_DATA
+        let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (!tab || !tab.url || !tab.url.includes('keden.kgd.gov.kz')) {
+            const tabs = await chrome.tabs.query({ url: "*://keden.kgd.gov.kz/*" });
+            const kedenTab = tabs.find(t => t.url && t.url.includes('keden.kgd.gov.kz'));
+            if (kedenTab) tab = kedenTab;
         }
 
-        const processedFiles = fileJobs.map(job => {
-            const fp = job.filePart;
-            const base64 = fp.inlineData ? fp.inlineData.data :
-                btoa(unescape(encodeURIComponent(fp.text || '')));
-            return {
-                name: job.file.name,
-                base64: base64,
-                mimeType: job.mimeType,
-                isBinary: !!fp.inlineData
-            };
+        const documents = fileJobs.map(job => ({
+            fileName: job.file.name,
+            parts: Array.isArray(job.filePart) ? job.filePart : [job.filePart]
+        }));
+
+        chrome.runtime.sendMessage({
+            action: 'START_EXTRACTION',
+            payload: {
+                documents,
+                iin: currentUserInfo ? currentUserInfo.iin : '000000000000',
+                targetTabId: tab ? tab.id : null
+            }
         });
 
-        // =====================================================
-        // ФАЗА 3: Отрисовка результатов
-        // =====================================================
-        finalData.rawFiles = processedFiles; // Attach raw files for later use
-
-        showLoading(false);
-        // Pass everything to renderPreview (data + validation + documents list)
-        renderPreview(finalData);
-        setStatus('✅ Анализ завершен. Проверьте данные и ошибки ниже.');
+        // Теперь popup просто ждет обновлений из Storage через handleStateUpdate
 
     } catch (error) {
         console.error(error);

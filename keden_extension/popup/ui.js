@@ -109,6 +109,7 @@ chrome.storage.local.get(['kedenDirectorySettings'], (result) => {
         setVal('prefDeclarantBin', kedenDirectorySettings.declarantBin);
 
         setVal('prefCustomsCode', kedenDirectorySettings.customsCode);
+        setVal('prefDestCustomsCode', kedenDirectorySettings.destCustomsCode);
         setVal('prefTransportMode', kedenDirectorySettings.transportMode);
         setVal('prefRepCertNum', kedenDirectorySettings.repCertNum);
         setVal('prefRepCertDate', kedenDirectorySettings.repCertDate);
@@ -135,6 +136,7 @@ document.getElementById('saveSettingsBtn').onclick = () => {
         declarantBin: document.getElementById('prefDeclarantBin').value.trim(),
 
         customsCode: document.getElementById('prefCustomsCode').value.trim(),
+        destCustomsCode: document.getElementById('prefDestCustomsCode').value.trim(),
         transportMode: document.getElementById('prefTransportMode').value.trim(),
         repCertNum: document.getElementById('prefRepCertNum').value.trim(),
         repCertDate: document.getElementById('prefRepCertDate').value.trim(),
@@ -243,9 +245,20 @@ function renderPreview(aiResponse) {
         data.shipping.customsCode = kedenDirectorySettings.customsCode;
     }
 
+    if (kedenDirectorySettings.destCustomsCode) {
+        if (!data.shipping) data.shipping = {};
+        data.shipping.destCustomsCode = kedenDirectorySettings.destCustomsCode;
+    }
+
     if (kedenDirectorySettings.transportMode) {
         if (!data.shipping) data.shipping = {};
         data.shipping.transportMode = kedenDirectorySettings.transportMode;
+    }
+
+    if (kedenDirectorySettings.aeoCertNum) {
+        if (!data.registry) data.registry = {};
+        data.registry.number = kedenDirectorySettings.aeoCertNum;
+        data.registry.date = kedenDirectorySettings.aeoCertDate || '';
     }
     // ----------------------------------------
 
@@ -308,10 +321,11 @@ function renderPreview(aiResponse) {
             { val: '04021', label: 'Инвойс (04021)' },
             { val: '02015', label: 'CMR (02015)' },
             { val: '09011', label: 'Реестр (09011)' },
-            { val: '11005', label: 'ТТН / Иные (11005)' },
             { val: '04131', label: 'Упаков. лист (04131)' },
-            { val: '10022', label: 'Допущение ТС (10022)' },
-            { val: '09024', label: 'Доверенность (09024)' },
+            { val: '09024', label: 'Свид. допущения (09024)' },
+            { val: '10022', label: 'Паспорт/Довер/Тех (10022)' },
+            { val: '11005', label: 'Договор эксп. (11005)' },
+            { val: '04033', label: 'Договор перев. (04033)' },
             { val: '00000', label: 'Другое' }
         ];
 
@@ -319,8 +333,13 @@ function renderPreview(aiResponse) {
             'INVOICE': '04021',
             'TRANSPORT_DOC': '02015',
             'REGISTRY': '09011',
-            'POWER_OF_ATTORNEY': '09024',
-            '11004': '09024',
+            'VEHICLE_PERMIT': '09024',
+            'DRIVER_ID': '10022',
+            'POWER_OF_ATTORNEY': '10022',
+            'VEHICLE_DOC': '10022',
+            'PACKING_LIST': '04131',
+            'CONTRACT': '11005',
+            'CONTRACT_TRANSPORT': '04033',
             'OTHER': '11005'
         };
         const currentCode = typeToCode[doc.type] || doc.type || '00000';
@@ -450,8 +469,27 @@ function renderPreview(aiResponse) {
                         <input type="text" class="preview-input" id="prev-customs-code" value="${data.shipping?.customsCode || ''}" placeholder="Например: 57505">
                     </div>
                     <div style="flex: 1;">
+                        <label style="font-size: 10px; color: #64748b;">Пост назначения (код)</label>
+                        <input type="text" class="preview-input" id="prev-dest-customs-code" value="${data.shipping?.destCustomsCode || ''}" placeholder="Например: 55510">
+                    </div>
+                </div>
+
+                <div class="row" style="margin-top: 8px; gap: 8px;">
+                     <div style="flex: 1;">
                         <label style="font-size: 10px; color: #64748b;">Вид транспорта (код)</label>
                         <input type="text" class="preview-input" id="prev-transport-mode" value="${data.shipping?.transportMode || ''}" placeholder="Например: 31">
+                    </div>
+                    <div style="flex: 1;"></div>
+                </div>
+
+                <div class="row" style="margin-top: 8px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 8px;">
+                    <div style="flex: 1;">
+                        <label style="font-size: 10px; color: #64748b;">Осн. транспортный док. (09011 / Реестр)</label>
+                        <input type="text" class="preview-input" id="prev-registry-num" value="${data.registry?.number || ''}" placeholder="Номер">
+                    </div>
+                    <div style="width: 80px;">
+                        <label style="font-size: 10px; color: #64748b;">Дата</label>
+                        <input type="text" class="preview-input" id="prev-registry-date" value="${data.registry?.date || ''}" placeholder="ДД.ММ.ГГГГ">
                     </div>
                 </div>
             `;
@@ -710,18 +748,28 @@ function scrapePreviewData() {
     const depInput = document.getElementById('prev-departure-country');
     const destInput = document.getElementById('prev-destination-country');
     const customsInput = document.getElementById('prev-customs-code');
+    const destCustomsInput = document.getElementById('prev-dest-customs-code');
     const transportInput = document.getElementById('prev-transport-mode');
 
-    if (depInput || destInput || customsInput || transportInput) {
+    if (depInput || destInput || customsInput || destCustomsInput || transportInput) {
         if (!newData.countries) newData.countries = {};
         newData.countries.departureCountry = depInput?.value || "";
         newData.countries.destinationCountry = destInput?.value || "";
 
-        if (customsInput || transportInput) {
+        if (customsInput || destCustomsInput || transportInput) {
             if (!newData.shipping) newData.shipping = {};
             if (customsInput) newData.shipping.customsCode = customsInput.value;
+            if (destCustomsInput) newData.shipping.destCustomsCode = destCustomsInput.value;
             if (transportInput) newData.shipping.transportMode = transportInput.value;
         }
+    }
+
+    const regNumInput = document.getElementById('prev-registry-num');
+    const regDateInput = document.getElementById('prev-registry-date');
+    if (regNumInput) {
+        if (!newData.registry) newData.registry = {};
+        newData.registry.number = regNumInput.value;
+        newData.registry.date = regDateInput?.value || "";
     }
 
     // Scrape Counteragents

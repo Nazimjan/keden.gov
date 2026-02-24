@@ -438,6 +438,13 @@
             </div>
 
             <div style="font-size: 12px; margin-bottom: 10px;">
+                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Таможенный орган назначения
+                    (код)</label>
+                <input type="text" id="prefDestCustomsCode" placeholder="Например: 55510"
+                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
+            </div>
+
+            <div style="font-size: 12px; margin-bottom: 10px;">
                 <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Вид транспорта на границе (код)</label>
                 <input type="text" id="prefTransportMode" placeholder="Например: 31"
                     style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
@@ -505,8 +512,10 @@
                 <div id="fileList" style="margin-bottom: 15px; font-size: 11px; max-height: 100px; overflow-y: auto;">
                 </div>
 
-                <div id="mainActions">
-                    <button class="btn" id="startBtn">ЗАПОЛНИТЬ ПИ</button>
+                <div id="mainActions" style="display: flex; gap: 8px;">
+                    <button class="btn" id="startBtn" style="flex: 3;">ЗАПОЛНИТЬ ПИ</button>
+                    <button id="resetBtn" title="Сбросить состояние"
+                        style="flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; color: #94a3b8; cursor: pointer; padding: 0 10px; transition: background 0.2s;">СБРОС</button>
                 </div>
 
                 <div id="validationSummary" style="margin-top: 20px;"></div>

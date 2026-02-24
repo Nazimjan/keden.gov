@@ -363,7 +363,8 @@ function mergeAgentResultsJS(agentResults) {
             countries: { departureCountry: '', destinationCountry: '' },
             products: [],
             registry: { number: '', date: '' },
-            driver: { present: false, iin: '', firstName: '', lastName: '' }
+            driver: { present: false, iin: '', firstName: '', lastName: '' },
+            shipping: { customsCode: '', destCustomsCode: '', transportMode: '' }
         }
     };
 
@@ -379,7 +380,8 @@ function mergeAgentResultsJS(agentResults) {
         driver: [],
         countries: [],
         productCandidates: [], // {source, docType, priority, products[]}
-        docTotals: [] // [{source, type, weight, packages, cost}]
+        docTotals: [], // [{source, type, weight, packages, cost}]
+        shipping: []
     };
 
     // Приоритет типов документов для товаров: REGISTRY > EXCEL_INVOICE > остальные
@@ -401,12 +403,13 @@ function mergeAgentResultsJS(agentResults) {
         if (!result || result.error) continue;
 
         const docType = result.document?.type || 'OTHER';
+        const isInvoice = (docType === 'INVOICE' || docType === '04021');
         const docName = _docTypeName(docType);
         const fileName = result.filename || 'Неизвестный файл';
         const sourceLabel = `${docName} (${fileName})`;
 
         // --- КРИТИЧЕСКАЯ ПРОВЕРКА: Инвойсы только в EXCEL ---
-        if (docType === 'INVOICE' && !fileName.toLowerCase().endsWith('.xlsx')) {
+        if (isInvoice && !fileName.toLowerCase().endsWith('.xlsx')) {
             merged.validation.errors.push({
                 field: 'document.type',
                 message: `❌ КРИТИЧЕСКАЯ ОШИБКА: Инвойс «${fileName}» должен быть СТРОГО в формате Excel (.xlsx). PDF или изображения не принимаются для инвойсов.`,
@@ -511,6 +514,11 @@ function mergeAgentResultsJS(agentResults) {
         if (result.countries) {
             mentions.countries.push({ source: sourceLabel, data: result.countries });
         }
+
+        // --- Доставка / Таможня ---
+        if (result.shipping) {
+            mentions.shipping.push({ source: sourceLabel, data: result.shipping });
+        }
     }
 
     // =======================================================
@@ -521,6 +529,15 @@ function mergeAgentResultsJS(agentResults) {
         const best = mentions.countries.find(m => m.source.includes('CMR')) || mentions.countries[0];
         merged.mergedData.countries.departureCountry = (best.data.departureCountry || '').toUpperCase();
         merged.mergedData.countries.destinationCountry = (best.data.destinationCountry || '').toUpperCase();
+    }
+
+    // Доставка / Таможня
+    if (mentions.shipping.length) {
+        // Приоритет CMR для таможенных кодов
+        const best = mentions.shipping.find(m => m.source.toLowerCase().includes('cmr')) || mentions.shipping[0];
+        if (best.data.customsCode) merged.mergedData.shipping.customsCode = best.data.customsCode;
+        if (best.data.destCustomsCode) merged.mergedData.shipping.destCustomsCode = best.data.destCustomsCode;
+        if (best.data.transportMode) merged.mergedData.shipping.transportMode = best.data.transportMode;
     }
 
     // =======================================================
@@ -1028,14 +1045,22 @@ function _roleNameRu(role) {
 /** Человекочитаемое название типа документа */
 function _docTypeName(docType) {
     const map = {
+        '04021': 'Инвойс',
         'INVOICE': 'Инвойс',
+        '02015': 'CMR/ТТН',
         'TRANSPORT_DOC': 'CMR/ТТН',
+        '09011': 'Реестр',
         'REGISTRY': 'Реестр',
+        '04131': 'Упаковочный лист',
         'PACKING_LIST': 'Упаковочный лист',
-        'DRIVER_ID': 'Удостоверение водителя',
+        '10022': 'Паспорт/Довер/Тех',
+        'DRIVER_ID': 'Паспорт водителя',
         'VEHICLE_DOC': 'Техпаспорт ТС',
-        'VEHICLE_PERMIT': 'Допущение ТС',
         'POWER_OF_ATTORNEY': 'Доверенность',
+        '09024': 'Допущение ТС',
+        'VEHICLE_PERMIT': 'Допущение ТС',
+        '11005': 'Договор эксп.',
+        '04033': 'Договор перев.',
         'OTHER': 'Другой документ'
     };
     return map[docType] || docType;
