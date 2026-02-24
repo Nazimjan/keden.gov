@@ -38,10 +38,10 @@ function Login({ onLogin }) {
 
                 <form onSubmit={handleSubmit}>
                     <div className="form-group">
-                        <label>Логин</label>
+                        <label>Email администратора</label>
                         <input
-                            type="text"
-                            placeholder="admin"
+                            type="email"
+                            placeholder="admin@example.com"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
                             autoFocus

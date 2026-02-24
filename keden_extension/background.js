@@ -1,10 +1,18 @@
 /**
  * background.js — Service Worker расширения (Manifest V3).
- * Отвечает за долгие сетевые запросы (SSE) к бэкенду.
- * Не зависит от жизни окна Popup.
+ * Отвечает за долгие сетевые запросы к Supabase.
  */
 
-const EXTRACT_URL = 'http://localhost:3001/api/v1/extract';
+importScripts('lib/supabase.js');
+importScripts('supabase_config.js');
+
+const supabaseClient = supabase.createClient(SUPABASE_CONFIG.URL, SUPABASE_CONFIG.ANON_KEY);
+const EXTRACT_URL = SUPABASE_CONFIG.EDGE_FUNCTION_URL;
+
+// При клике на иконку расширения — открываем в новой вкладке
+chrome.action.onClicked.addListener(() => {
+    chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+});
 
 // Состояние по умолчанию
 const INITIAL_STATE = {
@@ -23,6 +31,10 @@ async function updateState(updates) {
     const data = await chrome.storage.local.get('extractionState');
     const newState = { ...(data.extractionState || INITIAL_STATE), ...updates, timestamp: Date.now() };
     await chrome.storage.local.set({ extractionState: newState });
+
+    // Notify open popup or other pages
+    chrome.runtime.sendMessage({ action: 'STATE_UPDATED', state: newState }).catch(() => { });
+
     return newState;
 }
 
@@ -61,152 +73,148 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 });
 
 /**
- * Основная логика получения данных по SSE
+ * Основная логика: Загрузка в Storage + Вызов Edge Function
  */
 async function handleExtraction(documents, iin, targetTabId) {
     await updateState({
         status: 'PROCESSING',
-        progressMessage: 'Подключение к серверу...',
+        progressMessage: 'Загрузка документов в хранилище...',
         targetTabId,
         result: null,
         error: null
     });
 
-    let reader, decoder;
-
     try {
-        const formData = new FormData();
-        formData.append('iin', iin);
-        formData.append('targetTabId', targetTabId);
+        const storagePaths = [];
+        // Маппинг: индекс пути → оригинальное имя файла
+        const originalFileNames = [];
 
-        const metadata = [];
-        documents.forEach((doc, index) => {
-            const docMeta = { fileName: doc.fileName, parts: [] };
-
-            doc.parts.forEach(part => {
+        // 1. Загрузка файлов в Supabase Storage
+        for (const doc of documents) {
+            for (const part of doc.parts) {
+                let blobData, mimeType;
                 if (part.inlineData) {
                     const byteCharacters = atob(part.inlineData.data);
-                    const byteNumbers = new Array(byteCharacters.length);
+                    blobData = new Uint8Array(byteCharacters.length);
                     for (let i = 0; i < byteCharacters.length; i++) {
-                        byteNumbers[i] = byteCharacters.charCodeAt(i);
+                        blobData[i] = byteCharacters.charCodeAt(i);
                     }
-                    const byteArray = new Uint8Array(byteNumbers);
-                    const blob = new Blob([byteArray], { type: part.inlineData.mimeType });
-
-                    // Добавляем файл в FormData под именем 'files'
-                    formData.append('files', blob, doc.fileName);
-                    // В метаданных помечаем, что здесь должен быть файл (по индексу в массиве files)
-                    docMeta.parts.push({ type: 'file' });
+                    mimeType = part.inlineData.mimeType;
                 } else if (part.text) {
-                    docMeta.parts.push({ type: 'text', text: part.text });
-                }
-            });
-            metadata.push(docMeta);
-        });
-
-        formData.append('metadata', JSON.stringify(metadata));
-
-        if (currentAbortController) currentAbortController.abort();
-        currentAbortController = new AbortController();
-
-        const response = await fetch(EXTRACT_URL, {
-            method: 'POST',
-            body: formData,
-            headers: { 'Accept': 'text/event-stream' },
-            signal: currentAbortController.signal
-        });
-
-        if (!response.ok) {
-            const errData = await response.json().catch(() => ({ message: response.statusText }));
-            throw new Error(`Сервер вернул ошибку ${response.status}: ${errData.message || response.statusText}`);
-        }
-
-        reader = response.body.getReader();
-        decoder = new TextDecoder('utf-8');
-        let buffer = '';
-
-        let lastUpdate = 0;
-        const UPDATE_THROTTLE = 200; // ms
-
-        while (true) {
-            const { value, done } = await reader.read();
-            if (done) break;
-
-            buffer += decoder.decode(value, { stream: true });
-            const messages = buffer.split('\n\n');
-            buffer = messages.pop() || '';
-
-            for (const message of messages) {
-                if (!message.trim()) continue;
-
-                const lines = message.split('\n');
-                let eventType = 'message', data = '';
-
-                for (const line of lines) {
-                    if (line.startsWith('event: ')) eventType = line.slice(7).trim();
-                    if (line.startsWith('data: ')) data = line.slice(6).trim();
+                    blobData = new TextEncoder().encode(part.text);
+                    mimeType = 'text/plain';
                 }
 
-                if (!data) continue;
+                if (blobData) {
+                    const fileExt = mimeType === 'text/plain' ? '.txt' : '';
+                    const sanitizedBaseName = doc.fileName
+                        .replace(/\s+/g, '_')
+                        .replace(/[^\w.-]/gi, '');
 
-                if (eventType === 'status') {
-                    // Троттлинг обновлений статуса, чтобы не забивать chrome.storage
-                    const now = Date.now();
-                    if (now - lastUpdate > UPDATE_THROTTLE) {
-                        await updateState({ progressMessage: data });
-                        lastUpdate = now;
-                    }
-                } else if (eventType === 'complete') {
-                    const resultData = JSON.parse(data);
-                    if (resultData.success && resultData.payload) {
-                        const finalResult = {
-                            documents: resultData.documents || [],
-                            validation: {
-                                errors: resultData.errors || [],
-                                warnings: resultData.warnings || []
-                            },
-                            mergedData: resultData.payload,
-                            credits: resultData.credits,
-                            // Reconstruct rawFiles for content script (TЗ Box 44 automation)
-                            rawFiles: documents.map(doc => {
-                                const part = doc.parts[0];
-                                return {
-                                    name: doc.fileName,
-                                    base64: part.inlineData ? part.inlineData.data : btoa(unescape(encodeURIComponent(part.text || ''))),
-                                    mimeType: part.inlineData ? part.inlineData.mimeType : 'text/plain',
-                                    isBinary: !!part.inlineData
-                                };
-                            })
-                        };
+                    const fileName = `${iin}_${Date.now()}_${sanitizedBaseName || 'document'}${fileExt}`;
 
-                        await updateState({ status: 'SUCCESS', result: finalResult, progressMessage: 'Готово!' });
+                    const { data, error } = await supabaseClient.storage
+                        .from('documents')
+                        .upload(fileName, blobData, {
+                            contentType: mimeType,
+                            upsert: true
+                        });
 
-                        // Прямая инъекция во вкладку пользователя
-                        if (targetTabId) {
-                            chrome.tabs.sendMessage(targetTabId, {
-                                action: 'FILL_PI_DATA',
-                                data: finalResult.mergedData
-                            }).catch(e => console.warn('Could not inject to tab:', e));
-                        }
-                    } else {
-                        throw new Error(resultData.message || 'Сервер не вернул данные');
-                    }
-                    return;
-                } else if (eventType === 'error') {
-                    let errObj;
-                    try { errObj = JSON.parse(data); } catch (_) { errObj = { message: data }; }
-                    throw new Error(errObj.message || 'Ошибка на сервере');
+                    if (error) throw new Error(`Ошибка загрузки ${doc.fileName}: ${error.message}`);
+                    storagePaths.push(data.path);
+                    // Запоминаем оригинальное имя в том же порядке
+                    originalFileNames.push(doc.fileName);
                 }
             }
         }
 
-        throw new Error('Сервер закрыл соединение без ответа');
+        await updateState({ progressMessage: 'ИИ анализирует документы...' });
+
+        // 2. Вызов Edge Function — передаём originalFileNames чтобы ИИ мог вернуть их в документах
+        const { data: resultData, error: funcError } = await supabaseClient.functions.invoke('extract-ai', {
+            body: { storagePaths, iin, originalFileNames }
+        });
+
+        if (funcError) {
+            console.error('[Background] Functions error:', funcError);
+            let moreInfo = '';
+            if (funcError.context) {
+                try {
+                    const text = await funcError.context.text();
+                    const body = JSON.parse(text);
+                    moreInfo = body.error || body.message || text;
+                } catch (e) {
+                    moreInfo = funcError.context.statusText || '';
+                }
+            }
+            throw new Error(`Ошибка ИИ: ${moreInfo || funcError.message}`);
+        }
+
+        // Нормализуем структуру: Edge Function возвращает flat-объект,
+        // а renderPreview ожидает { counteragents: { consignor, consignee, carrier, declarant }, vehicles, driver, products }
+        const aiDocuments = resultData.documents || [];
+        const mergedData = {
+            counteragents: {
+                consignor: resultData.consignor || null,
+                consignee: resultData.consignee || null,
+                carrier: resultData.carrier || null,
+                declarant: resultData.declarant || null,
+                filler: resultData.filler || null
+            },
+            vehicles: resultData.vehicles || { tractorRegNumber: '', tractorCountry: '', trailerRegNumber: '', trailerCountry: '' },
+            countries: resultData.countries || { departureCountry: '', destinationCountry: '' },
+            products: resultData.products || [],
+            registry: resultData.registry || { number: '', date: '' },
+            driver: resultData.driver || { present: false, iin: '', firstName: '', lastName: '' },
+            shipping: resultData.shipping || { customsCode: '', destCustomsCode: '', transportMode: '' }
+        };
+
+        const finalResult = {
+            documents: documents.map((d, idx) => {
+                let aiDoc = aiDocuments[idx];
+                if (!aiDoc) {
+                    aiDoc = aiDocuments.find(ad =>
+                        ad.filename && (
+                            ad.filename === d.fileName ||
+                            d.fileName.toLowerCase().includes(ad.filename.toLowerCase()) ||
+                            ad.filename.toLowerCase().includes(d.fileName.toLowerCase())
+                        )
+                    );
+                }
+                return {
+                    filename: d.fileName,
+                    type: aiDoc?.type || '',
+                    number: aiDoc?.number || '',
+                    date: aiDoc?.date || ''
+                };
+            }),
+            validation: { errors: [], warnings: [] },
+            mergedData,
+            rawFiles: documents.map(doc => {
+                const part = doc.parts[0];
+                return {
+                    name: doc.fileName,
+                    base64: part.inlineData ? part.inlineData.data : btoa(unescape(encodeURIComponent(part.text || ''))),
+                    mimeType: part.inlineData ? part.inlineData.mimeType : 'text/plain',
+                    isBinary: !!part.inlineData
+                };
+            })
+        };
+
+        await updateState({ status: 'SUCCESS', result: finalResult, progressMessage: 'Готово!' });
+
+        if (targetTabId) {
+            chrome.tabs.sendMessage(targetTabId, {
+                action: 'FILL_PI_DATA',
+                data: finalResult.mergedData
+            }).catch(e => console.warn('Could not inject to tab:', e));
+        }
 
     } catch (err) {
+        console.error('[Supabase Extraction] Error:', err);
         await updateState({ status: 'ERROR', error: err.message });
         throw err;
     } finally {
-        try { reader?.cancel(); } catch (_) { }
         currentAbortController = null;
     }
 }

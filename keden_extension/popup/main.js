@@ -4,7 +4,8 @@
  * + Admin Panel Auth Integration
  */
 
-const ADMIN_API = 'http://localhost:3001';
+const ADMIN_API = SUPABASE_CONFIG.URL;
+const supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.URL, SUPABASE_CONFIG.ANON_KEY);
 let currentUserInfo = null; // Will store { iin, fio } after auth check
 
 /**
@@ -71,45 +72,75 @@ async function getKedenUserInfo() {
 }
 
 /**
- * Check authorization against admin backend
+ * Check authorization against Supabase
  */
 async function checkAdminAuth() {
     const userInfo = await getKedenUserInfo();
-    if (!userInfo || !userInfo.token) {
+    if (!userInfo) {
         return { allowed: false, message: 'Не удалось определить пользователя ИС Кеден. Откройте страницу Keden и авторизуйтесь.', userInfo: null };
     }
 
     try {
-        const resp = await fetch(`${ADMIN_API}/api/ext/auth`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: userInfo.token })
-        });
-        const data = await resp.json();
-        return { ...data, userInfo };
+        // 1. Пытаемся найти пользователя
+        let { data: user, error } = await supabaseClient
+            .from('users')
+            .select('*')
+            .eq('iin', userInfo.iin)
+            .maybeSingle();
+
+        // 2. Если пользователь не найден — создаем его автоматически
+        if (!user) {
+            console.log('[Supabase Auth] User not found, creating new account for IIN:', userInfo.iin);
+            const { data: newUser, error: insertError } = await supabaseClient
+                .from('users')
+                .insert([{
+                    iin: userInfo.iin,
+                    fio: userInfo.fio,
+                    is_allowed: true, // По умолчанию разрешаем (или false, если нужна модерация)
+                    credits: 10 // Дарим 10 приветственных кредитов
+                }])
+                .select()
+                .single();
+
+            if (insertError) {
+                console.error('[Supabase Auth] Auto-registration failed:', insertError);
+                return { allowed: false, message: `Ошибка регистрации. Обратитесь к админу. (Код: ${insertError.code})`, userInfo };
+            }
+            user = newUser;
+        }
+
+        // 3. Проверяем статус доступа существующего или нового пользователя
+        if (!user.is_allowed) {
+            return { allowed: false, message: 'Ваш доступ заблокирован администратором.', userInfo };
+        }
+
+        const now = new Date();
+        const hasSubscription = user.subscription_end && new Date(user.subscription_end) > now;
+
+        return {
+            allowed: true,
+            user: { ...user, hasSubscription },
+            userInfo
+        };
     } catch (e) {
-        // Admin server offline — allow access (graceful degradation)
-        return { allowed: true, message: 'Сервер администрирования недоступен.', userInfo, offline: true };
+        console.error('[Supabase Auth] check failed:', e);
+        return { allowed: true, message: 'Ошибка связи с облаком.', userInfo, offline: true };
     }
 }
 
 /**
- * Send action log to admin backend
+ * Send action log to Supabase
  */
 async function sendAdminLog(actionType, description = '') {
     if (!currentUserInfo) return;
     try {
-        await fetch(`${ADMIN_API}/api/ext/log`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                iin: currentUserInfo.iin,
-                fio: currentUserInfo.fio,
-                action_type: actionType,
-                description
-            })
+        await supabaseClient.from('logs').insert({
+            user_iin: currentUserInfo.iin,
+            user_fio: currentUserInfo.fio,
+            action_type: actionType,
+            description
         });
-    } catch (e) { /* offline */ }
+    } catch (e) { /* silent fail */ }
 }
 
 /**
@@ -130,7 +161,7 @@ function showAccessDenied(message) {
 
 // ===== MAIN INIT: Auth Check =====
 (async function initAuth() {
-    const result = await checkAdminAuth();
+    let result = await checkAdminAuth();
     if (result.userInfo) {
         currentUserInfo = result.userInfo;
     }
@@ -149,11 +180,20 @@ function showAccessDenied(message) {
             subText = `<span style="color: #4ade80;">Кредитов: ${result.user.credits || 0} ПИ</span>`;
         }
 
+        const fio = result.user.fio || result.user.iin || '';
+        // Показываем Фамилию + Инициалы (напр. Турлубеков М.Т.)
+        const fioParts = fio.trim().split(/\s+/);
+        const shortFio = fioParts.length >= 2
+            ? fioParts[0] + ' ' + fioParts.slice(1).map(p => p[0] ? p[0] + '.' : '').join('')
+            : fio;
+
         authStatusDiv.innerHTML = `
-            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
-                <span style="color:#94a3b8; font-weight: 600;">${result.user.fio || result.user.iin}</span>
+            <div style="font-size: 10px; color: #64748b; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em;">Добро пожаловать</div>
+            <div style="font-weight: 700; font-size: 13px; color: #f1f5f9; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${fio}">${shortFio}</div>
+            <div style="display: flex; align-items: center; gap: 6px;">
+                <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #4ade80;"></span>
+                <span style="font-size: 11px;">${subText}</span>
             </div>
-            <div>Статус: ${subText}</div>
         `;
         authStatusDiv.style.display = 'block';
     }
@@ -161,9 +201,20 @@ function showAccessDenied(message) {
     // Register state listener for background process
     chrome.storage.onChanged.addListener((changes, area) => {
         if (area === 'local' && changes.extractionState) {
+            console.log('[Popup] State changed in storage:', changes.extractionState.newValue.status);
             handleStateUpdate(changes.extractionState.newValue);
         }
     });
+
+    // Backup: explicit message from background
+    chrome.runtime.onMessage.addListener((msg) => {
+        if (msg.action === 'STATE_UPDATED') {
+            console.log('[Popup] Received direct state update message:', msg.state.status);
+            handleStateUpdate(msg.state);
+        }
+    });
+
+
 
     // Initial state check
     const { extractionState } = await chrome.storage.local.get('extractionState');
@@ -182,6 +233,15 @@ function showAccessDenied(message) {
         }
     }
 
+    // Auto-expand if opened in a large window (standalone/tab)
+    if (window.innerWidth > 500) {
+        const container = document.getElementById('mainContainer');
+        if (container) {
+            container.classList.add('expanded');
+            document.body.style.width = '100vw';
+        }
+    }
+
     // Log successful auth check
     if (!result.offline) {
         sendAdminLog('AUTH_CHECK', 'Расширение открыто');
@@ -195,7 +255,7 @@ function handleStateUpdate(state) {
     if (!state) return;
 
     if (state.status === 'PROCESSING') {
-        showLoading(true);
+        showLoading(true, state.progressMessage);
         setStatus(state.progressMessage || 'Обработка документов...');
     } else if (state.status === 'SUCCESS') {
         showLoading(false);
@@ -205,7 +265,9 @@ function handleStateUpdate(state) {
         }
     } else if (state.status === 'ERROR') {
         showLoading(false);
-        setStatus('❌ ' + (state.error || 'Произошла ошибка'));
+        const errorMsg = state.error || 'Произошла ошибка';
+        setStatus('❌ ' + errorMsg);
+        showError(errorMsg);
     } else if (state.status === 'IDLE') {
         showLoading(false);
         // Do not clear status if we have files selected
@@ -215,24 +277,66 @@ function handleStateUpdate(state) {
     }
 }
 
+let _pollingTimer = null;
+
+/**
+ * Активно опрашивает storage каждые 2 сек пока не получит SUCCESS/ERROR.
+ * Нужен для tab-режима, где chrome.storage.onChanged может не сработать.
+ */
+function startPollingForResult() {
+    if (_pollingTimer) clearInterval(_pollingTimer);
+
+    _pollingTimer = setInterval(async () => {
+        const { extractionState } = await chrome.storage.local.get('extractionState');
+        if (!extractionState) return;
+
+        const status = extractionState.status;
+        if (status === 'SUCCESS' || status === 'ERROR') {
+            clearInterval(_pollingTimer);
+            _pollingTimer = null;
+            handleStateUpdate(extractionState);
+        } else if (status === 'PROCESSING') {
+            // Обновляем прогресс-сообщение
+            if (extractionState.progressMessage) {
+                setStatus(extractionState.progressMessage);
+            }
+        }
+    }, 2000);
+
+    // Автоматически останавливаем через 10 минут (safety)
+    setTimeout(() => {
+        if (_pollingTimer) {
+            clearInterval(_pollingTimer);
+            _pollingTimer = null;
+        }
+    }, 600000);
+}
+
 document.getElementById('resetBtn').onclick = () => {
     chrome.runtime.sendMessage({ action: 'RESET_STATE' });
+    // Останавливаем polling если был запущен
+    if (_pollingTimer) { clearInterval(_pollingTimer); _pollingTimer = null; }
     window.appExtensionFiles = [];
     if (typeof renderFileList === 'function') renderFileList();
     if (typeof setStatus === 'function') setStatus('');
     if (typeof showLoading === 'function') showLoading(false);
+    currentAIData = null;
 
     // Hide preview and validation if open
     const previewArea = document.getElementById('previewArea');
     if (previewArea) previewArea.style.display = 'none';
     const mainContainer = document.getElementById('mainContainer');
-    if (mainContainer) mainContainer.classList.remove('expanded');
+    if (mainContainer) {
+        mainContainer.classList.remove('expanded');
+        document.body.style.width = '350px';
+    }
     const validationSummary = document.getElementById('validationSummary');
     if (validationSummary) validationSummary.innerHTML = '';
 };
 
 document.getElementById('openTabBtn').onclick = () => {
     logButtonClick('openTabBtn');
+    // Открываем как новую вкладку на весь экран
     chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
 };
 
@@ -245,7 +349,7 @@ document.getElementById('startBtn').onclick = async () => {
         return;
     }
 
-    showLoading(true);
+    showLoading(true, 'Подготовка файлов...');
 
     try {
         // =====================================================
@@ -277,14 +381,14 @@ document.getElementById('startBtn').onclick = async () => {
                         filePart = await renderPDFPagesAsImages(file, 5); // рендерим первые 5 страниц
                     }
                 } else if (isExcel) {
-                    console.log(`📊 ${file.name}: Excel, отправляем в Qwen...`);
+                    console.log(`📊 ${file.name}: Excel, отправляем на анализ...`);
                     const text = await readExcel(file);
                     if (!text || text.length < 10) {
                         throw new Error("Файл Excel пустой или не читается");
                     }
                     filePart = { text: `--- FILE: ${file.name} (Excel Content) ---\n${text}\n` };
                 } else if (isImage) {
-                    console.log(`🖼️ ${file.name}: изображение, отправляем в Qwen 3.5...`);
+                    console.log(`🖼️ ${file.name}: изображение, отправляем на анализ...`);
                     const base64 = await fileToOptimizedBase64(file);
                     filePart = { inlineData: { data: base64, mimeType: 'image/jpeg' } };
                 } else {
@@ -330,7 +434,8 @@ document.getElementById('startBtn').onclick = async () => {
             }
         });
 
-        // Теперь popup просто ждет обновлений из Storage через handleStateUpdate
+        // Активный polling — garantiert рендеринг даже если storage.onChanged не сработал
+        startPollingForResult();
 
     } catch (error) {
         console.error(error);
@@ -358,7 +463,7 @@ document.getElementById('confirmFillBtn').onclick = async () => {
         if (!scrapedData.counteragents) scrapedData.counteragents = {};
         scrapedData.counteragents.filler = { iin: currentUserInfo.iin };
     }
-    showLoading(true);
+    showLoading(true, '🚀 Заполнение ПИ...');
     setStatus('🚀 Заполнение ПИ...');
 
     try {

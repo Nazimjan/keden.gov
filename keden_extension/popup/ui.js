@@ -11,9 +11,44 @@ function setStatus(msg) {
     el.innerText = msg;
 }
 
-function showLoading(show) {
-    document.getElementById('loader').style.display = show ? 'block' : 'none';
-    document.getElementById('startBtn').disabled = show;
+function updatePreviewPlaceholder() {
+    const previewContent = document.getElementById('previewContent');
+    const container = document.getElementById('mainContainer');
+    if (previewContent && !currentAIData && container && container.classList.contains('expanded')) {
+        previewContent.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #94a3b8; text-align: center;">
+                <div style="font-size: 40px; opacity: 0.3; margin-bottom: 16px;">🔍</div>
+                <div style="font-size: 14px; font-weight: 500;">Данные не загружены</div>
+                <div style="font-size: 11px; margin-top: 8px;">Выберите файлы и нажмите "Заполнить ПИ",<br>чтобы запустить ИИ анализ</div>
+            </div>
+        `;
+    }
+    const fillBtn = document.getElementById('confirmFillBtn');
+    if (fillBtn) fillBtn.style.display = 'none';
+}
+
+function showLoading(show, message) {
+    const loader = document.getElementById('loader');
+    const startBtn = document.getElementById('startBtn');
+    if (loader) loader.style.display = show ? 'block' : 'none';
+    if (startBtn) startBtn.disabled = show;
+
+    const fillBtn = document.getElementById('confirmFillBtn');
+    if (show && fillBtn) fillBtn.style.display = 'none';
+
+    if (show) {
+        const previewContent = document.getElementById('previewContent');
+        const container = document.getElementById('mainContainer');
+        if (previewContent && container && container.classList.contains('expanded')) {
+            previewContent.innerHTML = `
+                <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #94a3b8;">
+                    <div class="loader" style="display: block; margin-bottom: 20px; width: 40px; height: 40px;"></div>
+                    <div style="font-size: 14px; font-weight: 500;">${message || 'AI анализирует документы...'}</div>
+                    <div style="font-size: 11px; margin-top: 8px;">Это может занять 15-30 секунд</div>
+                </div>
+            `;
+        }
+    }
 }
 
 window.appExtensionFiles = [];
@@ -21,6 +56,33 @@ window.appExtensionFiles = [];
 function handleFiles(newFiles) {
     window.appExtensionFiles = window.appExtensionFiles.concat(newFiles);
     renderFileList();
+}
+
+function showError(msg) {
+    const previewContent = document.getElementById('previewContent');
+    const container = document.getElementById('mainContainer');
+    if (previewContent && container && container.classList.contains('expanded')) {
+        previewContent.innerHTML = `
+            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #ef4444; text-align: center; padding: 20px;">
+                <div style="font-size: 40px; margin-bottom: 16px;">⚠️</div>
+                <div style="font-size: 14px; font-weight: 500; margin-bottom: 8px;">Ошибка анализа</div>
+                <div style="font-size: 12px; color: #94a3b8;">${msg || 'Неизвестная ошибка'}</div>
+                <button class="btn" id="retryAnalysisBtn" style="margin-top: 20px; width: auto; padding: 8px 16px;">ПОПРОБОВАТЬ СНОВА</button>
+            </div>
+        `;
+        // Attach listener after rendering
+        setTimeout(() => {
+            const retryBtn = document.getElementById('retryAnalysisBtn');
+            if (retryBtn) {
+                retryBtn.onclick = () => {
+                    const startBtn = document.getElementById('startBtn');
+                    if (startBtn) startBtn.click();
+                };
+            }
+        }, 0);
+    }
+    const fillBtn = document.getElementById('confirmFillBtn');
+    if (fillBtn) fillBtn.style.display = 'none';
 }
 
 function renderFileList() {
@@ -271,7 +333,19 @@ function renderPreview(aiResponse) {
     const container = document.getElementById('mainContainer');
 
     previewContent.innerHTML = '';
-    if (container) container.classList.add('expanded');
+    if (container) {
+        container.classList.add('expanded');
+        // В tab-режиме используем 100%, не фиксируем 800px
+        if (window.innerWidth <= 860) {
+            document.body.style.width = '800px';
+        } else {
+            document.body.style.width = '100vw';
+        }
+    }
+    // Явно показываем preview panel
+    if (previewArea) previewArea.style.display = 'block';
+    const fillBtn = document.getElementById('confirmFillBtn');
+    if (fillBtn) fillBtn.style.display = 'block';
 
     // 0. Render Validation Summary
     renderValidationSummary(validation);
@@ -279,6 +353,7 @@ function renderPreview(aiResponse) {
     // 0.1 Render Editable Documents List (44 Graph)
     const docSection = document.createElement('div');
     docSection.className = 'preview-section';
+    docSection.style.animation = 'fadeIn 0.3s ease-out forwards';
     docSection.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
             <h3 style="margin: 0;">📑 Документы (44 графа)</h3>
@@ -340,7 +415,7 @@ function renderPreview(aiResponse) {
             'PACKING_LIST': '04131',
             'CONTRACT': '11005',
             'CONTRACT_TRANSPORT': '04033',
-            'OTHER': '11005'
+            'OTHER': '00000'
         };
         const currentCode = typeToCode[doc.type] || doc.type || '00000';
 
@@ -375,6 +450,7 @@ function renderPreview(aiResponse) {
         const file = e.target.files[0];
         if (!file) return;
 
+        showLoading(true, `Анализ файла: ${file.name}`);
         setStatus(`⌛ Анализ нового файла: ${file.name}...`);
         try {
             const base64 = await fileToBase64(file);
@@ -418,9 +494,11 @@ function renderPreview(aiResponse) {
 
             addDocRow(newDoc, newIdx);
             setStatus(`✅ Файл ${file.name} добавлен и распознан.`);
+            showLoading(false);
         } catch (err) {
             console.error(err);
             setStatus(`❌ Ошибка анализа файла: ${err.message}`);
+            showLoading(false);
         }
     };
 
@@ -429,6 +507,8 @@ function renderPreview(aiResponse) {
         const v = data.vehicles;
         const section = document.createElement('div');
         section.className = 'preview-section';
+        section.style.animation = 'fadeIn 0.3s ease-out 0.1s forwards';
+        section.style.opacity = '0';
         section.innerHTML = `
                 <h3>Транспорт и Маршрут</h3>
                 <div class="row" style="margin-bottom: 8px;">
@@ -501,6 +581,8 @@ function renderPreview(aiResponse) {
         const ca = data.counteragents;
         const section = document.createElement('div');
         section.className = 'preview-section';
+        section.style.animation = 'fadeIn 0.3s ease-out 0.2s forwards';
+        section.style.opacity = '0';
         section.innerHTML = `<h3>Контрагенты</h3>`;
 
         const agents = [
@@ -562,6 +644,8 @@ function renderPreview(aiResponse) {
     if (data.driver && data.driver.present) {
         const section = document.createElement('div');
         section.className = 'preview-section';
+        section.style.animation = 'fadeIn 0.3s ease-out 0.25s forwards';
+        section.style.opacity = '0';
         section.innerHTML = `
             <h3>Водитель</h3>
             <div class="row" style="margin-bottom: 4px;">
@@ -588,6 +672,8 @@ function renderPreview(aiResponse) {
     if (data.products && data.products.length > 0) {
         const section = document.createElement('div');
         section.className = 'preview-section';
+        section.style.animation = 'fadeIn 0.3s ease-out 0.3s forwards';
+        section.style.opacity = '0';
         section.innerHTML = `
             <h3>Товары</h3>
             <table class="preview-table" style="table-layout: fixed;">

@@ -17,8 +17,8 @@ function Logs() {
         setLoading(true);
         try {
             const data = await api.getLogs(page, 30, filterIin);
-            setLogs(data.logs);
-            setTotalPages(data.totalPages);
+            setLogs(data.items);
+            setTotalPages(data.pages);
             setTotal(data.total);
         } catch (err) {
             console.error('Logs load error:', err);

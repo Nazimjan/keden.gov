@@ -14,10 +14,9 @@
     "host_permissions": [
         "https://keden.kgd.gov.kz/*",
         "https://pk.uchet.kz/*",
-        "http://localhost:3001/*"
+        "https://*.supabase.co/*"
     ],
     "action": {
-        "default_popup": "popup.html",
         "default_icon": "icon.png"
     },
     "icons": {

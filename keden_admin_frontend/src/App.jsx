@@ -5,23 +5,33 @@ import Dashboard from './Dashboard.jsx';
 import Users from './Users.jsx';
 import Logs from './Logs.jsx';
 
+import { supabase } from './supabase.js';
+
 function App() {
-    const [token, setToken] = useState(localStorage.getItem('admin_token'));
+    const [session, setSession] = useState(null);
     const [page, setPage] = useState('dashboard');
 
-    const handleLogin = (newToken) => {
-        localStorage.setItem('admin_token', newToken);
-        setToken(newToken);
-    };
+    useEffect(() => {
+        supabase.auth.getSession().then(({ data: { session } }) => {
+            setSession(session);
+        });
 
-    const handleLogout = () => {
-        localStorage.removeItem('admin_token');
-        setToken(null);
+        const {
+            data: { subscription },
+        } = supabase.auth.onAuthStateChange((_event, session) => {
+            setSession(session);
+        });
+
+        return () => subscription.unsubscribe();
+    }, []);
+
+    const handleLogout = async () => {
+        await api.logout();
         setPage('dashboard');
     };
 
-    if (!token) {
-        return <Login onLogin={handleLogin} />;
+    if (!session) {
+        return <Login onLogin={() => { }} />; // Login works with supabase auth directly
     }
 
     return (

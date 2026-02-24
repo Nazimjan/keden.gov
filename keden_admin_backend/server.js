@@ -102,7 +102,7 @@ function adminAuth(req, res, next) {
 // ============================================================
 // ADMIN AUTH ROUTES
 // ============================================================
-app.post('/api/admin/login', (req, res) => {
+app.post('/api/admin/login', async (req, res) => {
     const { username, password } = req.body;
     if (!username || !password) {
         return res.status(400).json({ error: 'Username and password required' });
@@ -122,7 +122,7 @@ app.post('/api/admin/login', (req, res) => {
     res.json({ token, username: admin.username });
 });
 
-app.post('/api/admin/change-password', adminAuth, (req, res) => {
+app.post('/api/admin/change-password', adminAuth, async (req, res) => {
     const { oldPassword, newPassword } = req.body;
     const admin = db.getAdmin();
 
@@ -138,22 +138,21 @@ app.post('/api/admin/change-password', adminAuth, (req, res) => {
 // ============================================================
 // ADMIN: User Management
 // ============================================================
-app.get('/api/admin/users', adminAuth, (req, res) => {
-    res.json(db.getUsers());
+app.get('/api/admin/users', adminAuth, async (req, res) => {
+    try {
+        const users = await db.getUsers();
+        res.json(users);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
-app.post('/api/admin/users', adminAuth, (req, res) => {
-    const { iin, fio } = req.body;
-    if (!iin || !fio) {
-        return res.status(400).json({ error: 'ИИН и ФИО обязательны' });
-    }
-    if (iin.length !== 12) {
-        return res.status(400).json({ error: 'ИИН должен содержать 12 цифр' });
-    }
-
+app.post('/api/admin/users', adminAuth, async (req, res) => {
+    const { iin, fio, is_allowed } = req.body;
+    if (!iin) return res.status(400).json({ error: 'IIN required' });
     try {
-        const user = db.addUser(iin, fio, 1); // <--- Admin manual addition gets is_allowed=1
-        res.json(user);
+        const user = await db.addUser(iin, fio, is_allowed || false);
+        res.status(201).json(user);
     } catch (e) {
         if (e.message.includes('UNIQUE')) {
             return res.status(409).json({ error: 'Пользователь с таким ИИН уже существует' });
@@ -162,25 +161,27 @@ app.post('/api/admin/users', adminAuth, (req, res) => {
     }
 });
 
-app.put('/api/admin/users/:id', adminAuth, (req, res) => {
+app.put('/api/admin/users/:id', adminAuth, async (req, res) => {
     const { is_allowed, fio, subscription_end, credits } = req.body;
     const id = parseInt(req.params.id);
-    const user = db.getUserById(id);
-    if (!user) return res.status(404).json({ error: 'User not found' });
-
     const updates = {};
     if (fio !== undefined) updates.fio = fio;
     if (is_allowed !== undefined) updates.is_allowed = is_allowed ? 1 : 0;
     if (subscription_end !== undefined) updates.subscription_end = subscription_end;
     if (credits !== undefined) updates.credits = parseInt(credits, 10) || 0;
 
-    const updated = db.updateUser(id, updates);
-    res.json(updated);
+    try {
+        const updated = await db.updateUser(id, updates);
+        if (!updated) return res.status(404).json({ error: 'User not found' });
+        res.json(updated);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
-app.delete('/api/admin/users/:id', adminAuth, (req, res) => {
+app.delete('/api/admin/users/:id', adminAuth, async (req, res) => {
     const id = parseInt(req.params.id);
-    const result = db.deleteUser(id);
+    const result = await db.deleteUser(id);
     if (!result) return res.status(404).json({ error: 'User not found' });
     res.json({ success: true });
 });
@@ -188,28 +189,37 @@ app.delete('/api/admin/users/:id', adminAuth, (req, res) => {
 // ============================================================
 // ADMIN: Logs
 // ============================================================
-app.get('/api/admin/logs', adminAuth, (req, res) => {
-    const { page = 1, limit = 50, iin } = req.query;
-    const result = db.getLogs({ page: parseInt(page), limit: parseInt(limit), iin });
-    res.json(result);
+app.get('/api/admin/logs', adminAuth, async (req, res) => {
+    try {
+        const { page = 1, limit = 50, iin } = req.query;
+        const result = await db.getLogs({ page: parseInt(page), limit: parseInt(limit), iin });
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
-app.delete('/api/admin/logs', adminAuth, (req, res) => {
-    db.clearLogs();
+app.delete('/api/admin/logs', adminAuth, async (req, res) => {
+    await db.clearLogs();
     res.json({ success: true });
 });
 
 // ============================================================
 // ADMIN: Dashboard Stats
 // ============================================================
-app.get('/api/admin/stats', adminAuth, (req, res) => {
-    res.json(db.getStats());
+app.get('/api/admin/stats', adminAuth, async (req, res) => {
+    try {
+        const stats = await db.getStats();
+        res.json(stats);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
 });
 
 // ============================================================
 // EXTENSION API: Auth check (JWT-based Auto-registration)
 // ============================================================
-app.post('/api/ext/auth', authLimiter, (req, res) => {
+app.post('/api/ext/auth', authLimiter, async (req, res) => {
     const { token } = req.body;
 
     if (!token) {
@@ -217,14 +227,12 @@ app.post('/api/ext/auth', authLimiter, (req, res) => {
     }
 
     try {
-        // Декодируем токен Кедена (без проверки подписи)
         const decoded = jwt.decode(token);
 
         if (!decoded || !decoded.iin) {
             return res.status(401).json({ error: 'Invalid Keden session' });
         }
 
-        // Проверка срока жизни токена
         const now = Math.floor(Date.now() / 1000);
         if (decoded.exp && decoded.exp < now) {
             return res.status(401).json({ error: 'Keden session expired' });
@@ -233,10 +241,10 @@ app.post('/api/ext/auth', authLimiter, (req, res) => {
         const iin = decoded.iin;
         const fio = decoded.fullName || decoded.name || iin;
 
-        // Авто-регистрация (Upsert)
-        const user = db.upsertUser(iin, fio);
+        // Авто-регистрация в Supabase (Upsert)
+        const user = await db.upsertUser(iin, fio);
 
-        if (!user || user.is_allowed === 0) {
+        if (!user || user.is_allowed === false || user.is_allowed === 0) {
             return res.status(403).json({
                 allowed: false,
                 message: 'Ваш доступ заблокирован или ожидает подтверждения администратором.'
@@ -339,22 +347,21 @@ app.post('/api/v1/merge', async (req, res) => {
 // ============================================================
 // EXTENSION API: Log action
 // ============================================================
-app.post('/api/ext/log', (req, res) => {
+app.post('/api/ext/log', async (req, res) => {
     const { iin, fio, action_type, description } = req.body;
     if (!iin || !action_type) {
         return res.status(400).json({ error: 'iin and action_type required' });
     }
 
-    const ip = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
-    db.addLog({ user_iin: iin, user_fio: fio || '', action_type, description: description || '', ip_address: ip });
+    // Логируем в Supabase
+    await db.addLog({ user_iin: iin, user_fio: fio || '', action_type, description: description || '' });
 
     if (action_type === 'FILL_PI') {
-        const user = db.getUserByIin(iin);
+        const user = await db.getUserByIin(iin);
         if (user) {
             const hasSubscription = user.subscription_end && new Date(user.subscription_end) > new Date();
-            // Deduct a credit only if they don't have an active subscription and have credits
             if (!hasSubscription && user.credits > 0) {
-                db.updateUser(user.id, { credits: user.credits - 1 });
+                await db.deductCredit(iin);
             }
         }
     }

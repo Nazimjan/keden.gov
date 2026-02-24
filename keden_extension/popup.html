@@ -13,15 +13,15 @@
         }
 
         body {
-            /* Remove fixed width to allow expansion */
             background-color: var(--bg);
             color: var(--text);
             font-family: 'Outfit', sans-serif;
             margin: 0;
-            padding: 20px;
-            overflow-y: auto;
+            padding: 10px;
+            overflow-x: hidden;
             display: flex;
             justify-content: center;
+            min-width: 350px;
         }
 
         .container {
@@ -32,18 +32,43 @@
             padding: 24px;
             box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
             width: 350px;
-            transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            max-width: 100%;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
             box-sizing: border-box;
+            position: relative;
         }
 
         .container.expanded {
-            width: 900px;
+            width: 800px;
+        }
+
+        /* Full screen support for tab mode */
+        @media screen and (min-width: 801px) {
+            body {
+                padding: 40px;
+                width: 100vw !important;
+                height: 100vh !important;
+                display: flex;
+                align-items: flex-start;
+                justify-content: center;
+                overflow-y: auto;
+            }
+
+            .container.expanded {
+                width: 100%;
+                max-width: 1200px;
+            }
+
+            .preview-panel {
+                max-height: none;
+            }
         }
 
         .content-layout {
             display: flex;
             gap: 24px;
             flex-direction: column;
+            width: 100%;
         }
 
         .container.expanded .content-layout {
@@ -54,6 +79,11 @@
         .side-panel {
             flex: 0 0 300px;
             width: 100%;
+        }
+
+        .container.expanded .side-panel {
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            padding-right: 24px;
         }
 
         .preview-panel {
@@ -141,11 +171,15 @@
 
         .status {
             margin-top: 20px;
-            font-size: 11px;
-            padding: 10px;
-            border-radius: 8px;
-            background: rgba(0, 0, 0, 0.2);
+            font-size: 12px;
+            padding: 12px;
+            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(5px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: #94a3b8;
             display: none;
+            animation: fadeIn 0.3s ease-out;
         }
 
         .loader {
@@ -166,6 +200,18 @@
 
             100% {
                 transform: rotate(360deg);
+            }
+        }
+
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
             }
         }
 
@@ -407,7 +453,7 @@
         </div>
 
         <div id="authStatus"
-            style="font-size: 11px; margin-bottom: 15px; background: rgba(0,0,0,0.2); padding: 8px; border-radius: 8px; border: 1px solid rgba(255,255,255,0.05); display: none;">
+            style="font-size: 11px; margin-bottom: 15px; background: rgba(168, 85, 247, 0.08); padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(168, 85, 247, 0.2); border-left: 3px solid #a855f7; display: none;">
         </div>
 
         <div id="settingsPanel"
@@ -518,23 +564,24 @@
                         style="flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; color: #94a3b8; cursor: pointer; padding: 0 10px; transition: background 0.2s;">СБРОС</button>
                 </div>
 
+                <div class="loader" id="loader" style="margin-top: 12px;"></div>
+                <div class="status" id="statusMessage" style="margin-top: 8px;"></div>
+
                 <div id="validationSummary" style="margin-top: 20px;"></div>
             </div>
-        </div>
-
-        <div id="previewArea" class="preview-panel">
-            <h2 style="font-size: 14px; margin-bottom: 10px; color: #a855f7;">Предпросмотр данных</h2>
-            <div id="previewContent"></div>
-            <button class="btn" id="confirmFillBtn" style="margin-top: 15px;">ПОДТВЕРДИТЬ И ЗАПОЛНИТЬ</button>
+            <div id="previewArea" class="preview-panel">
+                <h2 style="font-size: 14px; margin-bottom: 10px; color: #a855f7;">Предпросмотр данных</h2>
+                <div id="previewContent"></div>
+                <button class="btn" id="confirmFillBtn" style="margin-top: 15px;">ПОДТВЕРДИТЬ И ЗАПОЛНИТЬ</button>
+            </div>
         </div>
     </div>
 
 
-    <div class="loader" id="loader"></div>
-    <div class="status" id="statusMessage"></div>
-    </div>
     <script src="lib/xlsx.full.min.js"></script>
     <script src="lib/pdf.min.js"></script>
+    <script src="lib/supabase.js"></script>
+    <script src="supabase_config.js"></script>
     <script src="popup/ui.js"></script>
     <script src="popup/file_readers.js"></script>
     <script src="popup/agent-prompts.js"></script>
