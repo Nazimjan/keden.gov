@@ -28,7 +28,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         checkExtensionAccess()
             .then(auth => {
                 if (!auth.allowed) {
-                    alert('Ошибка доступа: ' + (auth.message || 'Ваш доступ заблокирован администратором.'));
+                    showKedenNotification('Ошибка доступа: ' + (auth.message || 'Ваш доступ заблокирован администратором.'), 'error');
                     sendResponse({ success: false, error: 'Access Denied' });
                     return;
                 }
@@ -630,15 +630,15 @@ async function fillCounteragents(params) {
             console.log('✅ Products processed:', createdProductIds.length);
         } catch (prodErr) {
             console.error('❌ Product import failed:', prodErr);
-            alert("Ошибка при импорте товаров: " + prodErr.message);
+            showKedenNotification("Ошибка при импорте товаров: " + prodErr.message, "error");
         }
     }
 
     // ОБРАБОТКА ДОКУМЕНТОВ 44 ГРАФЫ (Box 44 Automation)
     await processBox44Documents(consignmentId, params, createdProductIds, headers);
 
-    alert("Данные успешно отправлены.");
-    window.location.reload();
+    showKedenNotification("Данные успешно отправлены.", "success");
+    setTimeout(() => window.location.reload(), 1500);
 }
 
 async function processBox44Documents(consignmentId, params, productIds, headers) {
@@ -787,5 +787,78 @@ function base64ToBlob(base64, mimeType) {
         byteArrays.push(byteArray);
     }
     return new Blob(byteArrays, { type: mimeType });
+}
+
+/** Modern UI Notification System for Keden Portal */
+function showKedenNotification(message, type = 'info') {
+    let container = document.getElementById('keden-notification-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'keden-notification-container';
+        container.style.cssText = `
+            position: fixed;
+            top: 24px;
+            right: 24px;
+            z-index: 1000000;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            pointer-events: none;
+            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+        `;
+        document.body.appendChild(container);
+
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes kedenFadeIn {
+                from { transform: translateX(100%) scale(0.9); opacity: 0; }
+                to { transform: translateX(0) scale(1); opacity: 1; }
+            }
+            @keyframes kedenFadeOut {
+                to { transform: translateX(120%); opacity: 0; }
+            }
+            .keden-toast {
+                background: #0f172a;
+                color: white;
+                padding: 16px 24px;
+                border-radius: 12px;
+                box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
+                min-width: 300px;
+                max-width: 450px;
+                pointer-events: auto;
+                animation: kedenFadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                font-size: 14px;
+                font-weight: 500;
+                line-height: 1.5;
+                border: 1px solid rgba(255,255,255,0.1);
+            }
+            .keden-toast.success { border-left: 5px solid #10b981; }
+            .keden-toast.error { border-left: 5px solid #ef4444; }
+            .keden-toast.info { border-left: 5px solid #3b82f6; }
+        `;
+        document.head.appendChild(style);
+    }
+
+    const toast = document.createElement('div');
+    toast.className = `keden-toast ${type}`;
+
+    let icon = 'ℹ️';
+    if (type === 'success') icon = '✅';
+    if (type === 'error') icon = '❌';
+
+    toast.innerHTML = `
+        <span style="font-size: 20px;">${icon}</span>
+        <div style="flex: 1;">${message}</div>
+    `;
+
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.animation = 'kedenFadeOut 0.5s forwards';
+        setTimeout(() => toast.remove(), 500);
+    }, 5000);
 }
 

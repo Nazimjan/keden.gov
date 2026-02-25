@@ -333,7 +333,10 @@ async function handleExtraction(documents, iin, targetTabId) {
             timestamp: Date.now(),
             duration: durationStr,
             files: documents.map(d => d.fileName),
-            result: finalResult
+            result: {
+                ...finalResult,
+                rawFiles: [] // Don't store large base64 files in history
+            }
         };
 
         await addToHistory(historyItem);

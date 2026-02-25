@@ -20,6 +20,43 @@ function setStatus(msg) {
     }
 }
 
+function showToast(message, type = 'info') {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = `toast ${type}`;
+
+    let icon = 'ℹ️';
+    if (type === 'success') icon = '✅';
+    if (type === 'error') icon = '❌';
+
+    toast.innerHTML = `
+        <span style="font-size: 18px;">${icon}</span>
+        <div style="flex: 1;">${message}</div>
+        <div class="toast-progress"></div>
+    `;
+
+    container.appendChild(toast);
+
+    // Progress bar animation
+    const progress = toast.querySelector('.toast-progress');
+    const duration = 4000;
+    progress.style.transition = `transform ${duration}ms linear`;
+    progress.style.transform = 'scaleX(0)';
+
+    const timeout = setTimeout(() => {
+        toast.style.animation = 'toastOut 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards';
+        setTimeout(() => toast.remove(), 500);
+    }, duration);
+
+    toast.onclick = () => {
+        clearTimeout(timeout);
+        toast.style.animation = 'toastOut 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards';
+        setTimeout(() => toast.remove(), 500);
+    };
+}
+
 function updatePreviewPlaceholder() {
     const previewArea = document.getElementById('previewArea');
     const previewContent = document.getElementById('previewContent');

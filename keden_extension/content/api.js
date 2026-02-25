@@ -358,20 +358,7 @@ async function getProducts(consignmentId, headers) {
     return data.results || [];
 }
 
-async function copyCounteragent(sourceId, targetId, headers) {
-    const url = `${PI_API}/counteragent/${sourceId}/copy?targetId=${targetId}&targetType=PRELIMINARY&toType=TRANSPORTER&carrierEqualIndicator=true`;
-    const resp = await fetch(url, {
-        method: 'PATCH',
-        headers
-    });
 
-    if (!resp.ok) {
-        const err = await resp.text();
-        console.error("Counteragent Copy failed:", err);
-        throw new Error("Не удалось скопировать перевозчика: " + err);
-    }
-    return true;
-}
 
 async function updateCustomsIdentification(declId, headers) {
     // 1. Сначала пробуем получить текущий ID записи идентификации (если она есть)
@@ -481,11 +468,19 @@ async function getCounteragents(targetId, targetType, type, headers) {
 
 async function copyCounteragent(sourceId, targetId, targetType, toType, headers) {
     const url = `${PI_API}/counteragent/${sourceId}/copy?targetId=${targetId}&targetType=${targetType}&toType=${toType}&carrierEqualIndicator=true`;
+    console.log(`👤 DEBUG: Copying counteragent: ${url}`);
+
     const resp = await fetch(url, {
-        method: 'POST',
+        method: 'PATCH',
         headers
     });
-    return resp.ok;
+
+    if (!resp.ok) {
+        const err = await resp.text();
+        console.error("Counteragent Copy failed:", err);
+        throw new Error("Не удалось скопировать перевозчика: " + err);
+    }
+    return true;
 }
 async function getCounteragent(id, headers) {
     const url = `${PI_API}/counteragent/${id}`;

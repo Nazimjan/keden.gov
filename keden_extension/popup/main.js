@@ -367,7 +367,7 @@ document.getElementById('startBtn').onclick = async () => {
     const files = window.appExtensionFiles || [];
 
     if (files.length === 0) {
-        alert('Пожалуйста, выберите хотя бы один файл');
+        showToast('Пожалуйста, выберите хотя бы один файл', 'error');
         return;
     }
 
@@ -474,7 +474,7 @@ document.getElementById('confirmFillBtn').onclick = async () => {
     // Validation errors check removed as per user request to never block filling
     /*
     if (currentAIData && currentAIData.validation && currentAIData.validation.errors && currentAIData.validation.errors.length > 0) {
-        alert('Пожалуйста, исправьте ошибки перед заполнением. ' + currentAIData.validation.errors[0].message);
+        showToast('Пожалуйста, исправьте ошибки перед заполнением. ' + currentAIData.validation.errors[0].message, 'error');
         return;
     }
     */
