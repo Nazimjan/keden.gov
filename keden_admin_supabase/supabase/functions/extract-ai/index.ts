@@ -68,6 +68,81 @@ class Base64TransformStream extends TransformStream<Uint8Array, string> {
  */
 const sse = (event: string, data: any) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
+/**
+ * JSON Repair & Safe Parse (ported from client-side gemini.js)
+ */
+function repairJSON(text: string) {
+    let stack = [];
+    let isInsideString = false;
+    let escaped = false;
+
+    for (let i = 0; i < text.length; i++) {
+        let c = text[i];
+        if (escaped) {
+            escaped = false;
+            continue;
+        }
+        if (c === '\\') {
+            escaped = true;
+            continue;
+        }
+        if (c === '"') {
+            isInsideString = !isInsideString;
+            continue;
+        }
+        if (!isInsideString) {
+            if (c === '{') stack.push('}');
+            else if (c === '[') stack.push(']');
+            else if (c === '}' || c === ']') {
+                if (stack.length > 0 && stack[stack.length - 1] === c) {
+                    stack.pop();
+                }
+            }
+        }
+    }
+
+    let repaired = text.trim();
+    if (isInsideString) repaired += '"';
+    repaired = repaired.replace(/[:,\s]+$/, "");
+    repaired = repaired.replace(/(?:[{,])\s*"[^"]*"?\s*$/, function (match) {
+        if (match.trim().startsWith('{')) return '{';
+        return '';
+    });
+    repaired += stack.reverse().join('');
+    return repaired;
+}
+
+function safeParseJSON(text: string) {
+    if (!text) throw new Error("Получен пустой ответ от AI");
+    try {
+        return JSON.parse(text);
+    } catch {
+        console.warn("⚠️ Direct JSON parse failed, attempting repair...");
+        let cleaned = text.trim();
+        const firstBrace = cleaned.indexOf('{');
+        const lastBrace = cleaned.lastIndexOf('}');
+
+        if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+            const candidate = cleaned.substring(firstBrace, lastBrace + 1);
+            try {
+                return JSON.parse(candidate);
+            } catch {
+                cleaned = cleaned.substring(firstBrace);
+            }
+        } else if (firstBrace !== -1) {
+            cleaned = cleaned.substring(firstBrace);
+        }
+
+        cleaned = cleaned.replace(/\/\/.*$/gm, "");
+        cleaned = cleaned.replace(/\/\*[\s\S]*?\*\//g, "");
+        cleaned = cleaned.replace(/,\s*([}\]])/g, "$1");
+        cleaned = cleaned.replace(/[\u0000-\u001F\u007F-\u009F]/g, "");
+        cleaned = repairJSON(cleaned);
+
+        return JSON.parse(cleaned);
+    }
+}
+
 serve(async (req) => {
     const corsHeaders = {
         "Access-Control-Allow-Origin": "*",
@@ -134,6 +209,30 @@ serve(async (req) => {
             user = newUser;
         }
 
+        // 2. Access Check Helper (Shared)
+        const checkAndDeductCredits = async () => {
+            if (!user.is_allowed) throw new Error("Доступ заблокирован");
+            const now = new Date();
+            const hasSubscription = user.subscription_end && new Date(user.subscription_end) > now;
+
+            if (hasSubscription) return true; // Unlimited for subscribers
+
+            // Atomic credit deduction via PostgreSQL function
+            // This prevents race conditions and handles "credits > 0" check in one transaction
+            const { data: updatedUser, error: rpcError } = await supabase.rpc('deduct_credit', {
+                user_id: user.id
+            });
+
+            if (rpcError || !updatedUser || (Array.isArray(updatedUser) && updatedUser.length === 0)) {
+                console.error("RPC Credit Deduction Error:", rpcError?.message || "User not returned");
+                throw new Error("Недостаточно кредитов или ошибка списания. Пожалуйста, пополните баланс.");
+            }
+
+            // Update local user object with the new credit state (RPC returns an array for SETOF)
+            user = Array.isArray(updatedUser) ? updatedUser[0] : updatedUser;
+            return false;
+        };
+
         // Action: Check Access
         if (action === "check_access") {
             const now = new Date();
@@ -160,6 +259,9 @@ serve(async (req) => {
 
         // CORE LOGIC: Streaming Extraction
         if (action === "extract-stream") {
+            // Check & Deduct UPFRONT to avoid race conditions
+            await checkAndDeductCredits();
+
             const fileName = req.headers.get("x-file-name") || "document";
             const fileType = req.headers.get("x-file-type") || "image/jpeg";
             const promptStr = getBatchPrompt([fileName]);
@@ -175,48 +277,45 @@ serve(async (req) => {
 
             // Process in background
             (async () => {
+                const pingInterval = setInterval(() => {
+                    try {
+                        writer.write(encoder.encode(": keep-alive\n\n"));
+                    } catch {
+                        clearInterval(pingInterval);
+                    }
+                }, 15000);
+
                 try {
                     sendSSE("status", { message: "Starting streaming transfer..." });
 
-                    // 1. Prepare Composite Request Stream for OpenRouter
+                    // 1. Prepare Composite Request Stream for OpenRouter (SAFER JSON)
+                    const streamPlaceholder = "__BASE64_STREAM_CONTENT__";
+                    const bodyTemplate = {
+                        model: "google/gemini-3-flash-preview",
+                        stream: true,
+                        max_tokens: 8192,
+                        messages: [{
+                            role: "user",
+                            content: [
+                                { type: "text", text: promptStr },
+                                { type: "image_url", image_url: { url: `data:${fileType};base64,${streamPlaceholder}` } }
+                            ]
+                        }]
+                    };
+
+                    const fullJsonTemplate = JSON.stringify(bodyTemplate);
+                    const [jsonStart, jsonEnd] = fullJsonTemplate.split(streamPlaceholder);
+
                     const openRouterStream = new ReadableStream({
                         async start(controller) {
-                            // Part 1: JSON Prefix
-                            const prefix = JSON.stringify({
-                                model: "google/gemini-3-flash-preview", // Main model
-                                messages: [{
-                                    role: "user",
-                                    content: [
-                                        { type: "text", text: promptStr },
-                                        { type: "image_url", image_url: { url: `data:${fileType};base64,` } }
-                                    ]
-                                }],
-                                max_tokens: 8192,
-                                stream: true // Enable streaming from OpenRouter too
-                            });
-                            // We need to insert the base64 content INSIDE the string. 
-                            // Complex with pure JSON.stringify. Better build manually:
-                            const jsonStart = `{"model":"google/gemini-3-flash-preview","stream":true,"max_tokens":8192,"messages":[{"role":"user","content":[{"type":"text","text":${JSON.stringify(promptStr)}},{"type":"image_url","image_url":{"url":"data:${fileType};base64,`;
                             controller.enqueue(encoder.encode(jsonStart));
-
-                            // Part 2: Transformed Base64 Stream
                             const base64Stream = req.body!.pipeThrough(new Base64TransformStream());
                             const reader = base64Stream.getReader();
-
-                            let totalBytes = 0;
                             while (true) {
                                 const { done, value } = await reader.read();
                                 if (done) break;
                                 controller.enqueue(encoder.encode(value));
-                                totalBytes += value.length;
-                                // Periodic progress
-                                if (totalBytes % (1024 * 1024) < 16384) {
-                                    // sendSSE("progress", { bytes: totalBytes }); // Optional
-                                }
                             }
-
-                            // Part 3: JSON Suffix
-                            const jsonEnd = '"}}]}]}';
                             controller.enqueue(encoder.encode(jsonEnd));
                             controller.close();
                         }
@@ -224,7 +323,6 @@ serve(async (req) => {
 
                     sendSSE("status", { message: "Uploading to AI..." });
 
-                    // 2. Forward to OpenRouter
                     const aiRes = await fetch(OPENROUTER_URL, {
                         method: "POST",
                         headers: {
@@ -233,62 +331,38 @@ serve(async (req) => {
                             "HTTP-Referer": "https://keden.kgd.gov.kz",
                         },
                         body: openRouterStream,
-                        // @ts-ignore: duplex is required for streaming bodies in Deno
+                        // @ts-ignore: duplex is required for streaming in Deno/Fetch
+                        // See: https://github.com/denoland/deno/issues/16654
                         duplex: "half"
                     });
 
                     if (!aiRes.ok) throw new Error(`OpenRouter error: ${aiRes.statusText}`);
 
                     sendSSE("status", { message: "AI is analyzing..." });
-
-                    // 3. Pipe OpenRouter SSE to Client SSE
                     const aiReader = aiRes.body!.getReader();
-                    const decoder = new TextDecoder();
-
                     while (true) {
                         const { done, value } = await aiReader.read();
                         if (done) break;
-
-                        const chunk = decoder.decode(value);
-                        // OpenRouter sends SSE as "data: {...}"
-                        // We can either forward it raw or parse and repackage
-                        writer.write(value); // Direct forward for efficiency
+                        writer.write(value);
                     }
 
-                    // 5. Keep-alive ping loop
-                    const pingInterval = setInterval(() => {
-                        try {
-                            writer.write(encoder.encode(": keep-alive\n\n"));
-                        } catch {
-                            clearInterval(pingInterval);
-                        }
-                    }, 15000);
-
-                    // 4. Post-processing (Credits & Logs)
-                    const updateTask = (async () => {
-                        try {
-                            const now = new Date();
-                            const hasSubscription = user.subscription_end && new Date(user.subscription_end) > now;
-                            if (!hasSubscription) {
-                                await supabase.from("users").update({ credits: user.credits - 1 }).eq("id", user.id);
-                            }
-                            await supabase.from("logs").insert({
-                                user_iin: iin,
-                                action_type: "AI_STREAM_EXTRACT",
-                                description: `Streamed file: ${fileName}`
-                            });
-                        } finally {
-                            clearInterval(pingInterval);
-                        }
+                    // Post-processing Task
+                    const logTask = (async () => {
+                        await supabase.from("logs").insert({
+                            user_iin: iin,
+                            action_type: "AI_STREAM_EXTRACT",
+                            description: `Streamed file: ${fileName}`
+                        });
                     })();
 
                     // @ts-ignore
-                    if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(updateTask);
-                    else await updateTask;
+                    if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(logTask);
+                    else await logTask;
 
                 } catch (e: any) {
                     sendSSE("error", { message: e.message });
                 } finally {
+                    clearInterval(pingInterval);
                     try { writer.close(); } catch { }
                 }
             })();
@@ -308,12 +382,14 @@ serve(async (req) => {
             const { storagePaths, originalFileNames } = jsonBody;
             if (!storagePaths) throw new Error("Missing storagePaths");
 
-            const now = new Date();
-            const hasSubscription = user.subscription_end && new Date(user.subscription_end) > now;
-            if (!hasSubscription && user.credits <= 0) throw new Error("Insufficient credits");
+            // Check & Deduct UPFRONT
+            await checkAndDeductCredits();
 
             // Download files from Storage sequentially to save memory
             const fileContents = [];
+            let totalBytes = 0;
+            const MAX_TOTAL_BYTES = 70 * 1024 * 1024; // 70MB limit for safety in 150MB Deno env
+
             for (const path of storagePaths) {
                 try {
                     const { data, error } = await supabase.storage.from("documents").download(path);
@@ -321,6 +397,14 @@ serve(async (req) => {
                         console.error(`Download error for ${path}:`, error.message);
                         continue;
                     }
+
+                    // Check size before loading into ArrayBuffer
+                    if (totalBytes + data.size > MAX_TOTAL_BYTES) {
+                        console.warn(`[Warning] Skipping ${path} - total size limit reached (${MAX_TOTAL_BYTES} bytes)`);
+                        continue;
+                    }
+                    totalBytes += data.size;
+
                     const buffer = await data.arrayBuffer();
 
                     if (data.type.startsWith("image/") || data.type === "application/pdf") {
@@ -387,19 +471,23 @@ serve(async (req) => {
             }
 
             if (!aiData?.choices?.[0]?.message?.content) {
-                throw new Error(`AI error: Both models failed or returned invalid response.`);
+                throw new Error(`AI error: All models failed or returned invalid response.`);
             }
 
             let content = aiData.choices[0].message.content.trim();
             if (content.startsWith("```")) {
                 content = content.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
             }
-            const result = JSON.parse(content);
 
-            // Update Credits & Log
-            if (!hasSubscription) {
-                await supabase.from("users").update({ credits: user.credits - 1 }).eq("id", user.id);
+            let result;
+            try {
+                result = safeParseJSON(content);
+            } catch (e: any) {
+                console.error("JSON Parse failure. Content snippet:", content.substring(0, 200));
+                throw new Error(`AI returned malformed data: ${e.message}`);
             }
+
+            // Update Logs (Credits already deducted upfront)
             await supabase.from("logs").insert({
                 user_iin: iin,
                 action_type: "AI_EXTRACT_LEGACY",

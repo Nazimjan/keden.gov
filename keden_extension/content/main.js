@@ -85,6 +85,9 @@ async function fillCounteragents(params) {
     const token = JSON.parse(authStorage).state.token.access_token;
     const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
 
+    // Инициализация справочника стран (диномическая загрузка с кэшем)
+    await window.getCountries(headers);
+
     const counteragents = params && params.counteragents ? params.counteragents : {};
 
     // ОБОГАЩЕНИЕ ДАННЫХ (FETCH BY BIN/IIN)

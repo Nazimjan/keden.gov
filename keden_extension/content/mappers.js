@@ -22,20 +22,14 @@ function normalizeEntityType(entityType, name = "") {
     return "LEGAL";
 }
 
-const COUNTRY_MAP = {
-    "AF": { "id": 1, "numericCode": "004", "letterCodeShort": "AF", "shortNameRu": "АФГАНИСТАН" },
-    "CN": { "id": 44, "numericCode": "156", "letterCodeShort": "CN", "shortNameRu": "КИТАЙ" },
-    "KZ": { "id": 113, "numericCode": "398", "letterCodeShort": "KZ", "shortNameRu": "КАЗАХСТАН" },
-    "RU": { "id": 185, "numericCode": "643", "letterCodeShort": "RU", "shortNameRu": "РОССИЙСКАЯ ФЕДЕРАЦИЯ" },
-    "KG": { "id": 117, "numericCode": "417", "letterCodeShort": "KG", "shortNameRu": "КИРГИЗИЯ" },
-    "UZ": { "id": 234, "numericCode": "860", "letterCodeShort": "UZ", "shortNameRu": "УЗБЕКИСТАН" },
-    "TR": { "id": 224, "numericCode": "792", "letterCodeShort": "TR", "shortNameRu": "ТУРЦИЯ" },
-    "CG": { "id": 51, "numericCode": "178", "letterCodeShort": "CG", "shortNameRu": "КОНГО", "nameRu": "Республика Конго" },
-    "AM": { "id": 16, "numericCode": "051", "letterCodeShort": "AM", "shortNameRu": "АРМЕНИЯ" },
-    "GE": { "id": 81, "numericCode": "268", "letterCodeShort": "GE", "shortNameRu": "ГРУЗИЯ" },
-    "TJ": { "id": 219, "numericCode": "762", "letterCodeShort": "TJ", "shortNameRu": "ТАДЖИКИСТАН" },
-    "TM": { "id": 228, "numericCode": "795", "letterCodeShort": "TM", "shortNameRu": "ТУРКМЕНИЯ" }
-};
+function getCountryByCode(code) {
+    const country = window.findCountryByCode(code);
+    if (!country) {
+        console.warn(`[Mappers] Unknown country code: ${code}, using KZ as fallback`);
+        return { id: 113, letterCodeShort: "KZ", shortNameRu: "КАЗАХСТАН" };
+    }
+    return country;
+}
 
 function buildCounteragentPayload(source, extra) {
     if (!source || !source.present) return null;
@@ -83,14 +77,11 @@ function buildCounteragentPayload(source, extra) {
             };
 
             // Страна - TЗ п.2.2
-            if (addr.countryCode && COUNTRY_MAP[addr.countryCode]) {
-                mappedAddr.country = COUNTRY_MAP[addr.countryCode];
-                delete mappedAddr.countryCode;
-            } else if (addr.countryCode) {
-                mappedAddr.country = COUNTRY_MAP["CN"];
+            if (addr.countryCode) {
+                mappedAddr.country = getCountryByCode(addr.countryCode);
                 delete mappedAddr.countryCode;
             } else if (extra?.type === 'DECLARANT') {
-                mappedAddr.country = COUNTRY_MAP["KZ"];
+                mappedAddr.country = getCountryByCode("KZ");
             }
 
             // Попытка разделить адрес на компоненты для Декларанта (резидента)
@@ -185,7 +176,7 @@ function buildCounteragentPayload(source, extra) {
                 code: "09011",
                 ru: "Документ, свидетельствующий о включении лица в Реестр уполномоченных экономических операторов"
             },
-            country: COUNTRY_MAP["KZ"],
+            country: getCountryByCode("KZ"),
             regKindCode: regDoc.regKindCode || "1"
         };
     }
@@ -201,7 +192,7 @@ const VEHICLE_KIND = { "id": 29, "code": "31", "ru": "Состав трансп�
 
 function mapCountryCode(code) {
     if (!code) return null;
-    return COUNTRY_MAP[code.toUpperCase()] || null;
+    return window.findCountryByCode(code.toUpperCase());
 }
 
 function buildVehiclePayload(vehiclesData) {
@@ -212,7 +203,7 @@ function buildVehiclePayload(vehiclesData) {
     // Tractor
     const tractor = {
         indexOrder: 0,
-        country: mapCountryCode(vehiclesData.tractorCountry) || COUNTRY_MAP["KZ"],
+        country: mapCountryCode(vehiclesData.tractorCountry) || getCountryByCode("KZ"),
         transportRegNumber: vehiclesData.tractorRegNumber,
         vin: "-",
         vehBodyNumber: "-",

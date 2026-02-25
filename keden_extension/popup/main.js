@@ -499,7 +499,9 @@ document.getElementById('confirmFillBtn').onclick = async () => {
 
         chrome.tabs.sendMessage(tab.id, { action: 'FILL_PI_DATA', data: scrapedData }, (response) => {
             if (chrome.runtime.lastError) {
-                setStatus('❌ Ошибка: Обновите страницу Keden');
+                setStatus('🔄 Перезагрузка страницы Keden...');
+                chrome.tabs.reload(tab.id);
+                showToast('Страница Keden перезагружена. Нажмите кнопку еще раз через 2-3 секунды.', 'info');
                 showLoading(false);
                 return;
             }

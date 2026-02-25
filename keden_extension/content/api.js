@@ -187,6 +187,20 @@ async function fetchDocumentTypes(headers) {
     return JSON.parse(text);
 }
 
+async function fetchCountries(headers) {
+    const url = `${API_HOST}/api/v1/handbook/entries/search/countries?pageSize=300`;
+    try {
+        const resp = await fetch(url, { headers });
+        if (resp.ok) {
+            const data = await resp.json();
+            return data.results || data || [];
+        }
+    } catch (e) {
+        console.error("Failed to fetch countries:", e);
+    }
+    return [];
+}
+
 async function fetchCustomsByCode(code, headers) {
     console.log(`[API] Fetching customs by code: ${code}`);
     // Try by-code first (although it often fails with 404)
