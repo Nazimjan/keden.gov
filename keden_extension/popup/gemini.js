@@ -2,8 +2,8 @@ const OPENROUTER_API_KEY = 'sk-or-v1-d6c2e147c5b013295c03919c6e817c9ad04f2ab3225
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 // Стратегия:
-const MODEL_VISION = "qwen/qwen3.5-plus-02-15"; // Основная модель
-const MODEL_TEXT = "qwen/qwen3.5-plus-02-15";   // Теперь тоже Qwen
+const MODEL_VISION = "google/gemini-3-flash-preview"; // Основная модель
+const MODEL_TEXT = "google/gemini-3-flash-preview";   // Теперь тоже Gemini
 
 // Retry configuration
 const MAX_RETRIES = 3;
@@ -184,54 +184,37 @@ function safeParseJSON(text) {
   }
 }
 
-async function analyzeFileAgent(filePart, fileName) {
-  const iin = currentUserInfo && currentUserInfo.iin ? currentUserInfo.iin : '000000000000';
-
-  const response = await fetch('http://localhost:3001/api/v1/analyze-single', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ iin: iin, fileName: fileName, parts: Array.isArray(filePart) ? filePart : [filePart] })
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error || `Ошибка сервера: ${response.status}`);
-  }
-
-  const result = await response.json();
-  result.filename = fileName;
-  return result;
-}
-
 /**
  * Агент для ПАКЕТНОЙ обработки всех загруженных файлов разом.
- * Отправляет запрос на наш локальный сервер
+ * Теперь отправляет запрос через Background script в Supabase Cloud
  */
 async function analyzeAllFilesAgent(fileParts, fileNames) {
   const iin = currentUserInfo && currentUserInfo.iin ? currentUserInfo.iin : '000000000000';
 
-  const response = await fetch('http://localhost:3001/api/v1/analyze-batch', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ iin: iin, fileParts, fileNames })
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      action: 'ANALYZE_BATCH',
+      payload: { iin, fileParts, fileNames }
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(`Ошибка связи: ${chrome.runtime.lastError.message}`));
+        return;
+      }
+      if (response && response.success) {
+        resolve(response.result);
+      } else {
+        reject(new Error(response?.error || 'Облачный ИИ вернул ошибку.'));
+      }
+    });
   });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.error || `Ошибка сервера: ${response.status}`);
-  }
-
-  const result = await response.json();
-
-  // Обернем в формат, который ожидает renderPreview:
-  return result;
 }
 
-// Заглушки для legacy
+// Заглушки для legacy (теперь всё идет через пакетный анализ)
 async function analyzeSingleFile(filePart, fileName = "legacy_file") {
-  return await analyzeFileAgent(filePart, fileName);
+  return await analyzeAllFilesAgent([filePart], [fileName]);
 }
 
 async function askGeminiComplex(inputParts) {
-  return await analyzeFileAgent(inputParts, "legacy_complex");
+  return await analyzeAllFilesAgent([inputParts], ["legacy_complex"]);
 }
+

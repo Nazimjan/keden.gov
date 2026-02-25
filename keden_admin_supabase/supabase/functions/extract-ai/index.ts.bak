@@ -1,0 +1,153 @@
+import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { getBatchPrompt } from "./prompts.ts";
+const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
+const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+serve(async (req)=>{
+  const corsHeaders = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+    "Content-Type": "application/json"
+  };
+  if (req.method === "OPTIONS") return new Response("ok", {
+    headers: corsHeaders
+  });
+  try {
+    const { storagePaths, iin, originalFileNames } = await req.json();
+    if (!storagePaths || !iin) throw new Error("Missing storagePaths or iin");
+    const supabase = createClient(Deno.env.get("SUPABASE_URL") ?? "", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "");
+    // 1. Check User Credits
+    const { data: user, error: userError } = await supabase.from("users").select("*").eq("iin", iin).single();
+    if (userError || !user || !user.is_allowed) throw new Error("Unauthorized or user not found");
+    const now = new Date();
+    const hasSubscription = user.subscription_end && new Date(user.subscription_end) > now;
+    if (!hasSubscription && user.credits <= 0) throw new Error("Insufficient credits");
+    // 2. Download files from Storage & Prepare for AI
+    const fileContents = [];
+    for (const path of storagePaths){
+      const { data, error } = await supabase.storage.from("documents").download(path);
+      if (error) continue;
+      const buffer = await data.arrayBuffer();
+      if (data.type.startsWith("image/") || data.type === "application/pdf") {
+        // Fix: avoid spread operator on large arrays to prevent "Maximum call stack size exceeded"
+        const uint8 = new Uint8Array(buffer);
+        let binary = "";
+        const len = uint8.byteLength;
+        for(let i = 0; i < len; i++){
+          binary += String.fromCharCode(uint8[i]);
+        }
+        const base64 = btoa(binary);
+        fileContents.push({
+          type: "image_url",
+          image_url: {
+            url: `data:${data.type};base64,${base64}`
+          }
+        });
+      } else {
+        const text = new TextDecoder().decode(buffer);
+        fileContents.push({
+          type: "text",
+          text: `--- Content of ${path} ---\n${text}`
+        });
+      }
+    }
+    // 3. Call OpenRouter
+    const namesForPrompt = originalFileNames || storagePaths;
+    const prompt = getBatchPrompt(namesForPrompt) + "\n\nIMPORTANT: Return ONLY a valid JSON object. No markdown, no extra text.";
+    const models = [
+      "qwen/qwen3.5-plus-02-15",
+      "google/gemini-2.5-flash"
+    ];
+    let aiData = null;
+    let lastError = null;
+    let usedModel = "";
+    for (const model of models){
+      try {
+        const response = await fetch(OPENROUTER_URL, {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://keden.kgd.gov.kz",
+            "X-Title": "Keden AI Extension"
+          },
+          body: JSON.stringify({
+            model: model,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  {
+                    type: "text",
+                    text: prompt
+                  },
+                  ...fileContents
+                ]
+              }
+            ],
+            response_format: {
+              type: "json_object"
+            }
+          })
+        });
+        aiData = await response.json();
+        usedModel = model;
+        if (response.ok && aiData.choices?.[0]?.message?.content) {
+          if (model !== models[0]) {
+            console.log(`Used fallback model: ${model}`);
+          }
+          break;
+        } else {
+          lastError = aiData.error?.message || response.statusText;
+          console.warn(`Model ${model} failed: ${lastError}`, aiData.error);
+          // If it's auth error, we can't recover
+          if (response.status === 401 || response.status === 403) {
+            throw new Error(`OpenRouter Auth Error: ${lastError}`);
+          }
+          aiData = null;
+        }
+      } catch (e) {
+        lastError = e.message;
+        console.error(`Error calling ${model}: ${lastError}`);
+      }
+    }
+    if (!aiData || !aiData.choices?.[0]?.message?.content) {
+      throw new Error(`AI failed to return result. Last error: ${lastError}`);
+    }
+    let content = aiData.choices[0].message.content.trim();
+    // Remove possible markdown code blocks
+    if (content.startsWith("```")) {
+      content = content.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+    }
+    let result;
+    try {
+      result = JSON.parse(content);
+    } catch (parseErr) {
+      console.error("JSON Parse Error. Content:", content);
+      throw new Error(`Failed to parse AI response as JSON: ${parseErr.message}`);
+    }
+    // 4. Update Credits & Log
+    if (!hasSubscription) {
+      await supabase.from("users").update({
+        credits: user.credits - 1
+      }).eq("id", user.id);
+    }
+    await supabase.from("logs").insert({
+      user_iin: iin,
+      action_type: "AI_EXTRACT_SUPABASE",
+      description: `Processed ${storagePaths.length} files via ${usedModel}`
+    });
+    return new Response(JSON.stringify(result), {
+      headers: corsHeaders
+    });
+  } catch (err) {
+    console.error("Internal Edge Function Error:", err);
+    return new Response(JSON.stringify({
+      error: err.message,
+      details: "Check Supabase Edge Function logs for details."
+    }), {
+      status: 500,
+      headers: corsHeaders
+    });
+  }
+});

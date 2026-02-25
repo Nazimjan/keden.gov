@@ -22,17 +22,32 @@ async function getKedenUserInfo() {
             func: () => {
                 try {
                     const authStorage = localStorage.getItem('auth-storage');
-                    if (!authStorage) return null;
-                    const state = JSON.parse(authStorage).state;
-                    if (!state || !state.token) return null;
+                    let state = null;
+                    if (authStorage) {
+                        try {
+                            state = JSON.parse(authStorage).state;
+                        } catch (e) { }
+                    }
 
                     let iin = '', fio = '', token = '';
 
-                    if (state.token) {
-                        token = typeof state.token === 'string' ? state.token : (state.token.access_token || state.token.id_token || '');
+                    if (state) {
+                        if (state.token) {
+                            token = typeof state.token === 'string' ? state.token : (state.token.access_token || state.token.id_token || '');
+                        }
+                        if (!token && state.user && state.user.token) {
+                            token = state.user.token;
+                        }
+                        if (!token && state.userAccountData && state.userAccountData.token) {
+                            token = state.userAccountData.token;
+                        }
                     }
-                    if (!token && state.user && state.user.token) {
-                        token = state.user.token;
+
+                    if (!token) {
+                        token = localStorage.getItem('token') ||
+                            localStorage.getItem('access_token') ||
+                            sessionStorage.getItem('token') ||
+                            sessionStorage.getItem('access_token');
                     }
 
                     if (token && token.includes('.')) {
@@ -44,20 +59,24 @@ async function getKedenUserInfo() {
                                     return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
                                 }).join(''));
                                 const payload = JSON.parse(jsonPayload);
-                                iin = payload.iin || '';
-                                fio = payload.fullName || payload.name || '';
+                                iin = payload.iin || payload.preferred_username || payload.sub || '';
+                                fio = payload.fullName || payload.name || payload.given_name || '';
                             }
                         } catch (e) { }
                     }
-                    if (!iin && state.user) {
-                        iin = state.user.iin || '';
-                        fio = fio || state.user.fullName || '';
+
+                    if (state) {
+                        if (state.user) {
+                            iin = iin || state.user.iin || state.user.username || '';
+                            fio = fio || state.user.fullName || '';
+                        }
+                        if (state.userAccountData) {
+                            iin = iin || state.userAccountData.iin || '';
+                            const ud = state.userAccountData;
+                            fio = fio || [ud.lastName, ud.firstName, ud.middleName].filter(Boolean).join(' ');
+                        }
                     }
-                    if (!iin && state.userAccountData) {
-                        iin = state.userAccountData.iin || '';
-                        const ud = state.userAccountData;
-                        fio = fio || [ud.lastName, ud.firstName, ud.middleName].filter(Boolean).join(' ');
-                    }
+
                     if (!iin && !token) return null;
                     return { iin: iin || 'unknown', fio: fio || 'Пользователь', token: token };
                 } catch (e) { return { error: e.message }; }
@@ -255,13 +274,14 @@ function handleStateUpdate(state) {
     if (!state) return;
 
     if (state.status === 'PROCESSING') {
-        showLoading(true, state.progressMessage);
+        showLoading(true, state.progressMessage, state.extractionStartTime);
         setStatus(state.progressMessage || 'Обработка документов...');
     } else if (state.status === 'SUCCESS') {
-        showLoading(false);
+        const localDuration = showLoading(false);
+        const duration = state.extractionDuration || localDuration;
         if (state.result) {
             renderPreview(state.result);
-            setStatus(state.progressMessage || '✅ Анализ завершен');
+            setStatus(`✅ Время обработки заняло ${duration} времени`);
         }
     } else if (state.status === 'ERROR') {
         showLoading(false);
@@ -328,17 +348,19 @@ document.getElementById('resetBtn').onclick = () => {
     const mainContainer = document.getElementById('mainContainer');
     if (mainContainer) {
         mainContainer.classList.remove('expanded');
-        document.body.style.width = '350px';
+        document.body.style.width = '380px';
     }
     const validationSummary = document.getElementById('validationSummary');
     if (validationSummary) validationSummary.innerHTML = '';
 };
 
-document.getElementById('openTabBtn').onclick = () => {
-    logButtonClick('openTabBtn');
-    // Открываем как новую вкладку на весь экран
-    chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
-};
+const openTabBtn = document.getElementById('openTabBtn');
+if (openTabBtn) {
+    openTabBtn.onclick = () => {
+        logButtonClick('openTabBtn');
+        chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
+    };
+}
 
 document.getElementById('startBtn').onclick = async () => {
     logButtonClick('startBtn');

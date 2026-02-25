@@ -3,201 +3,291 @@
 
 <head>
     <meta charset="UTF-8">
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
     <style>
         :root {
-            --bg: #0f172a;
-            --glass: rgba(255, 255, 255, 0.05);
-            --accent: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
-            --text: #f8fafc;
+            --bg: #09090b;
+            --glass: rgba(255, 255, 255, 0.03);
+            --glass-strong: rgba(255, 255, 255, 0.08);
+            --glass-border: rgba(255, 255, 255, 0.12);
+            --accent: linear-gradient(135deg, #007AFF 0%, #5856D6 100%);
+            --accent-glow: rgba(0, 122, 255, 0.4);
+            --text-primary: #ffffff;
+            --text-secondary: rgba(255, 255, 255, 0.55);
+            --radius-xl: 24px;
+            --radius-l: 14px;
+            --shadow-premium: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
         }
 
         body {
             background-color: var(--bg);
-            color: var(--text);
-            font-family: 'Outfit', sans-serif;
+            color: var(--text-primary);
+            font-family: 'Plus Jakarta Sans', -apple-system, sans-serif;
             margin: 0;
-            padding: 10px;
+            padding: 16px;
             overflow-x: hidden;
             display: flex;
             justify-content: center;
-            min-width: 350px;
+            min-height: 520px;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Animated Mesh Gradient Background */
+        .mesh-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            z-index: -1;
+            background: var(--bg);
+            overflow: hidden;
+        }
+
+        .mesh-glow-1 {
+            position: absolute;
+            top: -10%;
+            left: -10%;
+            width: 70%;
+            height: 70%;
+            background: radial-gradient(circle, rgba(88, 86, 214, 0.15) 0%, transparent 70%);
+            filter: blur(80px);
+            animation: move 20s infinite alternate;
+        }
+
+        .mesh-glow-2 {
+            position: absolute;
+            bottom: -10%;
+            right: -10%;
+            width: 70%;
+            height: 70%;
+            background: radial-gradient(circle, rgba(0, 122, 255, 0.12) 0%, transparent 70%);
+            filter: blur(80px);
+            animation: move 25s infinite alternate-reverse;
+        }
+
+        @keyframes move {
+            from {
+                transform: translate(0, 0) rotate(0deg);
+            }
+
+            to {
+                transform: translate(20%, 20%) rotate(20deg);
+            }
         }
 
         .container {
             background: var(--glass);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 20px;
-            padding: 24px;
-            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
-            width: 350px;
+            backdrop-filter: blur(30px) saturate(180%);
+            -webkit-backdrop-filter: blur(30px) saturate(180%);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-xl);
+            padding: 28px;
+            box-shadow: var(--shadow-premium);
+            width: 380px;
             max-width: 100%;
-            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
             box-sizing: border-box;
             position: relative;
         }
 
         .container.expanded {
-            width: 800px;
+            width: 880px;
+            padding: 32px;
         }
 
-        /* Full screen support for tab mode */
-        @media screen and (min-width: 801px) {
-            body {
-                padding: 40px;
-                width: 100vw !important;
-                height: 100vh !important;
-                display: flex;
-                align-items: flex-start;
-                justify-content: center;
-                overflow-y: auto;
-            }
-
-            .container.expanded {
-                width: 100%;
-                max-width: 1200px;
-            }
-
-            .preview-panel {
-                max-height: none;
-            }
-        }
-
-        .content-layout {
+        /* Floating Header */
+        header {
             display: flex;
-            gap: 24px;
-            flex-direction: column;
-            width: 100%;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
         }
 
-        .container.expanded .content-layout {
-            flex-direction: row;
-            align-items: flex-start;
+        .brand-logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
-        .side-panel {
-            flex: 0 0 300px;
-            width: 100%;
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #34C759;
+            border-radius: 50%;
+            box-shadow: 0 0 12px #34C759;
+            animation: pulse 2s infinite;
         }
 
-        .container.expanded .side-panel {
-            border-right: 1px solid rgba(255, 255, 255, 0.1);
-            padding-right: 24px;
-        }
+        @keyframes pulse {
+            0% {
+                transform: scale(1);
+                opacity: 1;
+                box-shadow: 0 0 0 0 rgba(52, 199, 89, 0.7);
+            }
 
-        .preview-panel {
-            flex: 1;
-            display: none;
-            max-height: 600px;
-            overflow-y: auto;
-            padding-right: 8px;
-        }
+            70% {
+                transform: scale(1.1);
+                opacity: 0.8;
+                box-shadow: 0 0 0 6px rgba(52, 199, 89, 0);
+            }
 
-        .container.expanded .preview-panel {
-            display: block;
-        }
-
-        /* Scrollbar styling */
-        .preview-panel::-webkit-scrollbar {
-            width: 6px;
-        }
-
-        .preview-panel::-webkit-scrollbar-track {
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 10px;
-        }
-
-        .preview-panel::-webkit-scrollbar-thumb {
-            background: rgba(168, 85, 247, 0.3);
-            border-radius: 10px;
+            100% {
+                transform: scale(1);
+                opacity: 1;
+                box-shadow: 0 0 0 0 rgba(52, 199, 89, 0);
+            }
         }
 
         h1 {
-            font-size: 20px;
-            font-weight: 600;
-            margin: 0 0 8px 0;
-            background: var(--accent);
+            font-size: 21px;
+            font-weight: 700;
+            margin: 0;
+            letter-spacing: -0.8px;
+            background: linear-gradient(180deg, #FFFFFF 0%, rgba(255, 255, 255, 0.7) 100%);
             -webkit-background-clip: text;
             background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
         .subtitle {
-            font-size: 12px;
-            color: #94a3b8;
-            margin-bottom: 24px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            margin-bottom: 30px;
+            font-weight: 500;
+            line-height: 1.4;
         }
 
         .upload-area {
-            border: 2px dashed rgba(255, 255, 255, 0.2);
-            border-radius: 12px;
-            padding: 30px 10px;
+            border: 1.5px dashed var(--glass-border);
+            background: rgba(255, 255, 255, 0.01);
+            border-radius: var(--radius-l);
+            padding: 40px 20px;
             text-align: center;
             cursor: pointer;
-            transition: all 0.3s ease;
-            margin-bottom: 20px;
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            margin-bottom: 24px;
+            position: relative;
         }
 
         .upload-area:hover {
-            border-color: #a855f7;
-            background: rgba(168, 85, 247, 0.05);
+            border-color: rgba(0, 122, 255, 0.5);
+            background: rgba(0, 122, 255, 0.03);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px -10px rgba(0, 122, 255, 0.15);
         }
 
         .upload-area svg {
-            width: 40px;
-            height: 40px;
-            margin-bottom: 12px;
-            color: #a855f7;
+            width: 48px;
+            height: 48px;
+            margin-bottom: 16px;
+            stroke: #007AFF;
         }
 
         .btn {
             width: 100%;
-            padding: 12px;
-            border-radius: 12px;
+            padding: 16px;
+            border-radius: var(--radius-l);
             border: none;
             background: var(--accent);
             color: white;
             font-weight: 600;
+            font-size: 15px;
+            letter-spacing: -0.2px;
             cursor: pointer;
-            transition: transform 0.2s ease, opacity 0.2s ease;
-            box-shadow: 0 4px 15px rgba(168, 85, 247, 0.4);
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+            box-shadow: 0 12px 24px -6px var(--accent-glow);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
         }
 
         .btn:hover {
             transform: translateY(-2px);
-            opacity: 0.9;
+            box-shadow: 0 18px 32px -8px var(--accent-glow);
+            filter: brightness(1.1);
+        }
+
+        .btn:active {
+            transform: translateY(1px);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            box-shadow: none;
+            color: var(--text-primary);
+            border: 1px solid var(--glass-border);
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .icon-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--text-secondary);
+            padding: 8px;
+            border-radius: 50%;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .icon-btn:hover {
+            background: rgba(255, 255, 255, 0.08);
+            color: #fff;
+            transform: translateY(-1px);
+        }
+
+        .delete-doc-btn {
+            background: none;
+            border: none;
+            color: #ef4444;
+            border-radius: 50%;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 18px;
+            transition: all 0.2s;
+        }
+
+        .delete-doc-btn:hover {
+            background: rgba(239, 68, 68, 0.1);
+            transform: scale(1.1);
         }
 
         .status {
-            margin-top: 20px;
-            font-size: 12px;
-            padding: 12px;
-            border-radius: 12px;
-            background: rgba(255, 255, 255, 0.05);
-            backdrop-filter: blur(5px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            color: #94a3b8;
+            margin-top: 24px;
+            font-size: 13px;
+            padding: 14px;
+            border-radius: var(--radius-l);
+            background: rgba(129, 140, 248, 0.05);
+            border: 1px solid rgba(129, 140, 248, 0.15);
+            color: #c7d2fe;
             display: none;
-            animation: fadeIn 0.3s ease-out;
+            animation: fadeIn 0.4s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .loader {
             display: none;
-            width: 20px;
-            height: 20px;
-            border: 2px solid #f3f3f3;
-            border-top: 2px solid #a855f7;
+            width: 24px;
+            height: 24px;
+            border: 2.5px solid rgba(255, 255, 255, 0.1);
+            border-top: 2.5px solid var(--accent-solid);
             border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 10px auto;
+            animation: spin 0.8s linear infinite;
+            margin: 16px auto;
         }
 
         @keyframes spin {
-            0% {
-                transform: rotate(0deg);
-            }
-
             100% {
                 transform: rotate(360deg);
             }
@@ -215,139 +305,262 @@
             }
         }
 
+        /* History Styles */
+        .history-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            max-height: 500px;
+            overflow-y: auto;
+            padding-bottom: 20px;
+        }
+
+        .history-item {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--radius-l);
+            padding: 16px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            animation: fadeIn 0.4s ease-out;
+        }
+
+        .history-item:hover {
+            background: rgba(255, 255, 255, 0.07);
+            transform: translateY(-2px);
+            border-color: rgba(0, 122, 255, 0.3);
+            box-shadow: 0 8px 24px -10px rgba(0, 0, 0, 0.5);
+        }
+
+        .history-item:active {
+            transform: translateY(0);
+        }
+
+        .history-item-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .history-item-date {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .history-item-duration {
+            font-size: 10px;
+            color: #34C759;
+            font-weight: 700;
+            background: rgba(52, 199, 89, 0.1);
+            padding: 2px 8px;
+            border-radius: 20px;
+        }
+
+        .history-item-files {
+            font-size: 13px;
+            font-weight: 600;
+            color: #fff;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 4px;
+        }
+
+        .history-item-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .history-delete-btn {
+            padding: 4px 8px;
+            background: rgba(255, 59, 48, 0.1);
+            border: 1px solid rgba(255, 59, 48, 0.2);
+            color: #ff3b30;
+            border-radius: 6px;
+            font-size: 10px;
+            cursor: pointer;
+            opacity: 0;
+            transition: all 0.2s;
+            margin-left: 8px;
+        }
+
+        .history-item:hover .history-delete-btn {
+            opacity: 1;
+        }
+
+        .history-delete-btn:hover {
+            background: #ff3b30;
+            color: #fff;
+            transform: scale(1.1);
+        }
+
+
         .tabs {
             display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-            padding-bottom: 10px;
+            background: rgba(255, 255, 255, 0.04);
+            padding: 4px;
+            border-radius: 12px;
+            gap: 4px;
+            margin-bottom: 28px;
         }
 
         .tab {
+            flex: 1;
+            padding: 10px;
+            border-radius: 9px;
             background: none;
             border: none;
-            color: #94a3b8;
+            color: var(--text-secondary);
             cursor: pointer;
-            padding: 5px 10px;
-            font-size: 14px;
-            position: relative;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
         }
 
         .tab.active {
-            color: #a855f7;
-            font-weight: 600;
-        }
-
-        .tab.active::after {
-            content: '';
-            position: absolute;
-            bottom: -11px;
-            left: 0;
-            width: 100%;
-            height: 2px;
-            background: #a855f7;
-        }
-
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
+            background: #ffffff;
+            color: #000000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
         }
 
         .input-group {
-            margin-bottom: 15px;
+            margin-bottom: 18px;
         }
 
         .input-group label {
             display: block;
-            font-size: 11px;
-            color: #94a3b8;
-            margin-bottom: 5px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 8px;
+            padding-left: 4px;
         }
 
         .input-group input {
             width: 100%;
-            padding: 10px;
-            border-radius: 8px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            background: rgba(0, 0, 0, 0.2);
+            padding: 12px;
+            border-radius: 10px;
+            border: 1px solid var(--glass-border);
+            background: rgba(0, 0, 0, 0.3);
             color: white;
             box-sizing: border-box;
+            font-size: 14px;
+            transition: all 0.2s;
         }
 
-        .row {
-            display: flex;
-            gap: 10px;
+        .input-group input:focus {
+            outline: none;
+            border-color: var(--accent-solid);
+            box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.2);
         }
 
+        /* Glass Cards for Preview */
         .preview-section {
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 10px;
-            padding: 12px;
-            margin-bottom: 15px;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 24px;
+            margin-bottom: 24px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
 
         .preview-section h3 {
-            font-size: 12px;
-            margin-top: 0;
-            margin-bottom: 8px;
-            color: #94a3b8;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-            padding-bottom: 4px;
-        }
-
-        .preview-table {
-            width: 100%;
-            font-size: 11px;
-            border-collapse: collapse;
+            font-size: 15px;
+            font-weight: 600;
+            margin: 0 0 16px 0;
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            gap: 10px;
         }
 
         .preview-table th {
             text-align: left;
             color: #64748b;
-            padding: 4px;
+            font-size: 11px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            padding: 12px 8px;
+            border-bottom: 1px solid var(--glass-border);
         }
 
-        .preview-table td {
-            padding: 4px;
+        .preview-row {
+            display: grid;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .preview-label {
+            display: block;
+            font-size: 11px;
+            font-weight: 600;
+            color: #94a3b8;
+            margin-bottom: 6px;
+            padding-left: 2px;
+        }
+
+        .doc-item {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid transparent;
+            border-radius: 12px;
+            padding: 8px;
+            transition: all 0.2s;
+        }
+
+        .doc-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+            border-color: var(--glass-border);
         }
 
         .preview-input {
-            background: rgba(255, 255, 255, 0.05);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            border-radius: 4px;
-            color: white;
-            padding: 4px 4px;
-            /* Reduced horizontal padding */
-            font-size: 11px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1.5px solid var(--glass-border);
+            border-radius: 12px;
+            color: #fff;
+            padding: 10px 14px;
+            font-size: 13px;
+            font-weight: 500;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             width: 100%;
             box-sizing: border-box;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
         }
 
-        /* Hide number input arrows (spinners) */
-        input::-webkit-outer-spin-button,
-        input::-webkit-inner-spin-button {
-            -webkit-appearance: none;
-            appearance: none;
-            margin: 0;
-        }
-
-        input[type=number] {
-            -moz-appearance: textfield;
-            appearance: textfield;
+        .preview-input:hover {
+            border-color: rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.05);
         }
 
         .preview-input:focus {
-            border-color: #a855f7;
+            background: rgba(0, 0, 0, 0.4);
+            border-color: #007AFF;
+            box-shadow: 0 0 0 4px rgba(0, 122, 255, 0.15);
             outline: none;
         }
 
-        /* TNVED Validation Styles */
+        select.preview-input {
+            appearance: none;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' fill='none' stroke='RGBA(255,255,255,0.6)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m3 4 3 3 3-3'/%3E%3C/svg%3E");
+            background-repeat: no-repeat;
+            background-position: right 10px center;
+            padding-right: 30px !important;
+        }
+
+        select.preview-input option {
+            background-color: #121214;
+            color: #fff;
+        }
+
         .tnved-valid {
-            border-color: #22c55e !important;
-            background: rgba(34, 197, 94, 0.1) !important;
+            border-color: #10b981 !important;
+            background: rgba(16, 185, 129, 0.1) !important;
         }
 
         .tnved-invalid {
@@ -355,229 +568,312 @@
             background: rgba(239, 68, 68, 0.1) !important;
         }
 
-        .tnved-loading {
-            border-color: #64748b !important;
-            animation: tnved-pulse 1.5s ease-in-out infinite;
-        }
-
-        @keyframes tnved-pulse {
-
-            0%,
-            100% {
-                opacity: 1;
-            }
-
-            50% {
-                opacity: 0.5;
-            }
-        }
-
-        .doc-row {
-            transition: background 0.2s;
-        }
-
-        .doc-row:hover {
-            background: rgba(255, 255, 255, 0.05) !important;
-        }
-
-        .doc-type-select {
-            cursor: pointer;
-            background: rgba(15, 23, 42, 0.8);
-        }
-
-        .hidden {
-            display: none !important;
-        }
-
-        /* Validation UI Styles */
-        .validation-card {
-            background: rgba(239, 68, 68, 0.1);
-            border: 1px solid rgba(239, 68, 68, 0.3);
-            border-radius: 12px;
-            padding: 12px;
-            margin-bottom: 20px;
-            font-size: 11px;
-        }
-
-        .validation-card.warning {
-            background: rgba(245, 158, 11, 0.1);
-            border: 1px solid rgba(245, 158, 11, 0.3);
-        }
-
-        .validation-title {
-            font-weight: 600;
-            margin-bottom: 8px;
+        .auth-card {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+            border: 1px solid var(--glass-border);
+            border-radius: 14px;
+            padding: 14px;
+            margin-bottom: 24px;
             display: flex;
-            align-items: center;
+            flex-direction: column;
             gap: 6px;
         }
 
-        .validation-item {
-            margin-bottom: 4px;
-            color: #fca5a5;
+        /* Settings Overaly Style */
+        #settingsPanel {
+            background: rgba(18, 18, 20, 0.95);
+            backdrop-filter: blur(40px);
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 40px 100px rgba(0, 0, 0, 0.8);
+            border-radius: var(--radius-xl) !important;
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 100;
+            padding: 24px;
+            box-sizing: border-box;
+            overflow-y: auto;
         }
 
-        .validation-card.warning .validation-item {
-            color: #fcd34d;
+        .content-layout {
+            display: flex;
+            gap: 32px;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
         }
 
-        .field-error {
-            border-color: #ef4444 !important;
-            box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.5);
+        .container.expanded .content-layout {
+            flex-direction: row;
         }
 
-        .field-warning {
-            border-color: #f59e0b !important;
-            box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.5);
+        .side-panel {
+            flex: 0 0 320px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
         }
 
-        .error-hint {
-            color: #ef4444;
-            font-size: 9px;
-            margin-top: 2px;
+        .container.expanded .side-panel {
+            border-right: 1px solid var(--glass-border);
+            padding-right: 32px;
+            max-height: 700px;
+            overflow-y: auto;
+        }
+
+        .preview-panel {
+            flex: 1;
+            display: none;
+            max-height: 650px;
+            overflow-y: auto;
+            padding-right: 12px;
+            animation: fadeInRight 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes fadeInRight {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        .container.expanded .preview-panel {
             display: block;
+        }
+
+        .preview-panel::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        .preview-panel::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .preview-panel::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+
+        /* Full screen support for tab mode */
+        @media screen and (min-width: 881px) {
+            body {
+                padding: 40px;
+                align-items: center;
+            }
+
+            .container.expanded {
+                width: 100%;
+                max-width: 1280px;
+                height: 85vh;
+                display: flex;
+                flex-direction: column;
+            }
+
+            .content-layout {
+                flex: 1;
+                overflow: hidden;
+            }
+
+            .preview-panel {
+                flex: 1;
+                height: 100%;
+                overflow-y: auto;
+            }
         }
     </style>
 </head>
 
 <body>
+    <div class="mesh-bg">
+        <div class="mesh-glow-1"></div>
+        <div class="mesh-glow-2"></div>
+    </div>
+
     <div class="container" id="mainContainer">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <h1>KEDEN AI</h1>
-                <button id="settingsBtn" title="Настройки (Справочник)"
-                    style="background:none; border:none; cursor:pointer; color: #a855f7; font-size: 18px;">⚙️</button>
+        <header>
+            <div class="brand-logo">
+                <h1>Keden Assistant</h1>
+                <div class="status-dot" id="onlineDot" title="Ready to analyze"></div>
             </div>
-            <button id="openTabBtn" title="Открыть в новой вкладке"
-                style="background:none; border:none; cursor:pointer; color: #a855f7; font-size: 18px;">⤢</button>
-        </div>
-
-        <div id="authStatus"
-            style="font-size: 11px; margin-bottom: 15px; background: rgba(168, 85, 247, 0.08); padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(168, 85, 247, 0.2); border-left: 3px solid #a855f7; display: none;">
-        </div>
-
-        <div id="settingsPanel"
-            style="display: none; background: rgba(15, 23, 42, 0.95); position: absolute; top: 0; left: 0; width: 100%; height: 100%; z-index: 100; border-radius: 20px; padding: 24px; box-sizing: border-box; overflow-y: auto;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                <h2 style="font-size: 16px; margin: 0; color: #a855f7;">Справочник (По умолчанию)</h2>
-                <button id="closeSettingsBtn"
-                    style="background:none; border:none; color:#ef4444; font-size:24px; cursor:pointer;">&times;</button>
+            <div style="display: flex; gap: 8px;">
+                <button id="settingsBtn" class="icon-btn" title="Настройки">
+                    <svg width="20" height="20" fill="currentColor" viewBox="0 0 24 24">
+                        <path
+                            d="M12 15.5c-1.93 0-3.5-1.57-3.5-3.5s1.57-3.5 3.5-3.5 3.5 1.57 3.5 3.5-1.57 3.5-3.5 3.5zm7-1.4l-1.63-.64c.08-.47.13-.96.13-1.46s-.05-.96.13-1.46l1.63-.64c.48-.19.68-.76.44-1.24l-1.3-2.25c-.24-.42-.77-.58-1.21-.37l-1.74.8c-.85-.68-1.84-1.19-2.92-1.48L12.1 3.6c-.05-.51-.48-.91-.99-.91h-2.22c-.51 0-.94.4-.99.91l-.26 1.76c-1.08.29-2.07.8-2.92 1.48l-1.74-.8c-.44-.22-.97-.05-1.21.37l-1.3 2.25c-.24.48-.04 1.05.44 1.24l1.63.64c-.08.47-.13.96-.13 1.46s.05.99.13 1.46l-1.63.64c-.48.19-.68.76-.44 1.24l1.3 2.25c.24.42.77.58 1.21.37l1.74-.8c.85.68 1.84 1.19 2.92 1.48l.26 1.76c.05.51.48.91.99.91h2.22c.51 0 .94-.4.99-.91l.26-1.76c1.08-.29 2.07-.8 2.92-1.48l1.74.8c.44.22.97.05 1.21-.37l1.3-2.25c.24-.48.04-1.05-.44-1.24z" />
+                    </svg>
+                </button>
             </div>
+        </header>
 
-            <div style="font-size: 12px; margin-bottom: 10px;">
-                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Перевозчик (БИН/ИИН)</label>
-                <input type="text" id="prefCarrierBin"
-                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-            </div>
-            <div style="font-size: 12px; margin-bottom: 10px;">
-                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Декларант (БИН/ИИН)</label>
-                <input type="text" id="prefDeclarantBin"
-                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-            </div>
-
-
-            <div style="font-size: 12px; margin-bottom: 10px;">
-                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Таможенный орган отправления
-                    (код)</label>
-                <input type="text" id="prefCustomsCode" placeholder="Например: 57505"
-                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-            </div>
-
-            <div style="font-size: 12px; margin-bottom: 10px;">
-                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Таможенный орган назначения
-                    (код)</label>
-                <input type="text" id="prefDestCustomsCode" placeholder="Например: 55510"
-                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-            </div>
-
-            <div style="font-size: 12px; margin-bottom: 10px;">
-                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Вид транспорта на границе (код)</label>
-                <input type="text" id="prefTransportMode" placeholder="Например: 31"
-                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-            </div>
-
-            <hr style="border-top: 1px solid rgba(255,255,255,0.1); margin: 15px 0;">
-
-            <div style="font-size: 12px; margin-bottom: 10px;">
-                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Свидетельство ТП - номер, дата</label>
-                <div style="display: flex; gap: 8px;">
-                    <input type="text" id="prefRepCertNum" placeholder="Номер св-ва"
-                        style="flex: 2; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-                    <input type="text" id="prefRepCertDate" placeholder="ДД.ММ.ГГГГ"
-                        style="flex: 1; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-                </div>
-            </div>
-
-            <div style="font-size: 12px; margin-bottom: 10px;">
-                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Свидетельство УЭО (09011) - номер,
-                    дата</label>
-                <div style="display: flex; gap: 8px;">
-                    <input type="text" id="prefAeoCertNum" placeholder="Номер св-ва"
-                        style="flex: 2; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-                    <input type="text" id="prefAeoCertDate" placeholder="ДД.ММ.ГГГГ"
-                        style="flex: 1; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-                </div>
-            </div>
-
-            <div style="font-size: 12px; margin-bottom: 10px;">
-                <label style="display:block; color:#94a3b8; margin-bottom: 4px;">Доверенность (09024) - номер, дата
-                    выдачи, окончание</label>
-                <input type="text" id="prefPoaNum" placeholder="Номер довер."
-                    style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box; margin-bottom: 6px;">
-                <div style="display: flex; gap: 8px;">
-                    <input type="text" id="prefPoaDateStr" placeholder="Выдача ДД.ММ.ГГГГ"
-                        style="flex: 1; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-                    <input type="text" id="prefPoaDateEnd" placeholder="Годен до ДД.ММ.ГГГГ"
-                        style="flex: 1; background: rgba(0,0,0,0.2); border: 1px solid rgba(255,255,255,0.1); color: white; padding: 6px; border-radius: 4px; box-sizing: border-box;">
-                </div>
-            </div>
-
-            <button id="saveSettingsBtn" class="btn" style="margin-top: 15px; width: 100%;">СОХРАНИТЬ
-                справочник</button>
-            <div id="settingsSaveStatus"
-                style="color: #4ade80; font-size: 11px; margin-top: 8px; text-align: center; display: none;">Сохранено!
-            </div>
-        </div>
+        <p class="subtitle">Интеллектуальная автоматизация таможенных документов на базе ИИ.</p>
 
         <div class="content-layout">
-            <div class="side-panel">
-                <div class="upload-area" id="dropZone">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"
-                        style="width:40px;height:40px;color:#a855f7;margin-bottom:12px;">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                            d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12">
-                        </path>
-                    </svg>
-                    <div style="font-size: 13px;">Загрузите документы (PDF, Excel, Фото)</div>
-                    <div style="font-size: 10px; color: #64748b; margin-top: 4px;">можно выбрать несколько файлов</div>
-                    <div style="font-size: 10px; color: #ef4444; margin-top: 8px; font-weight: 600;">⚠️ ИНВОЙСЫ — СТРОГО
-                        В EXCEL (.xlsx)</div>
-                    <input type="file" id="fileInput" hidden multiple accept=".pdf,.xlsx,.docx,.txt,.png,.jpg,.jpeg">
+            <div class="side-panel" id="sidebar">
+                <!-- User Auth Status Info -->
+                <div id="authStatus"
+                    style="display: none; background: rgba(255,255,255,0.03); border: 1px solid var(--glass-border); border-radius: 16px; padding: 16px; margin-bottom: 24px;">
                 </div>
 
-                <div id="fileList" style="margin-bottom: 15px; font-size: 11px; max-height: 100px; overflow-y: auto;">
+                <div class="tabs">
+                    <button class="tab active" data-tab="uploadTab">Анализ</button>
+                    <button class="tab" data-tab="historyTab">История</button>
                 </div>
 
-                <div id="mainActions" style="display: flex; gap: 8px;">
-                    <button class="btn" id="startBtn" style="flex: 3;">ЗАПОЛНИТЬ ПИ</button>
-                    <button id="resetBtn" title="Сбросить состояние"
-                        style="flex: 1; background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px; color: #94a3b8; cursor: pointer; padding: 0 10px; transition: background 0.2s;">СБРОС</button>
+                <div id="uploadTab" class="tab-content active">
+                    <div class="upload-area" id="dropZone">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                            stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                            <polyline points="17 8 12 3 7 8" />
+                            <line x1="12" y1="3" x2="12" y2="15" />
+                        </svg>
+                        <div style="font-weight: 600; font-size: 15px; margin-bottom: 6px;">Зарузите документы</div>
+                        <div style="font-size: 12px; color: var(--text-secondary);">Перетащите файлы или нажмите для
+                            выбора</div>
+                        <div style="font-size: 10px; color: #ff3b30; margin-top: 10px; font-weight: 600;">ИНВОЙСЫ —
+                            СТРОГО В EXCEL (.xlsx)</div>
+                        <input type="file" id="fileInput" multiple hidden accept=".pdf,.png,.jpg,.jpeg,.xlsx">
+                    </div>
+
+                    <div id="fileList" style="margin-bottom: 20px; max-height: 120px; overflow-y: auto;"></div>
+
+                    <div id="actions" style="display: flex; gap: 10px; margin-top: 20px;">
+                        <button class="btn" id="startBtn" style="flex: 1; min-width: 0;">
+                            <span>✨</span>
+                            Запустить
+                        </button>
+                        <button id="resetBtn" class="btn btn-secondary" style="flex: 0 0 48px; padding: 0; width: 48px;"
+                            title="Сбросить все">
+                            <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2"
+                                viewBox="0 0 24 24">
+                                <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"></path>
+                                <path d="M21 3v5h-5"></path>
+                                <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"></path>
+                                <path d="M3 21v-5h5"></path>
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div id="loader" class="loader"></div>
+                    <div id="statusMessage" class="status"></div>
                 </div>
 
-                <div class="loader" id="loader" style="margin-top: 12px;"></div>
-                <div class="status" id="statusMessage" style="margin-top: 8px;"></div>
-
-                <div id="validationSummary" style="margin-top: 20px;"></div>
+                <div id="historyTab" class="tab-content" style="display: none;">
+                    <div
+                        style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                        <div style="font-size: 14px; font-weight: 700;">Последние 50 записей</div>
+                        <button id="clearHistoryBtn" class="icon-btn" title="Очистить всё"
+                            style="font-size: 12px; color: #ff3b30;">
+                            <span>🗑️</span> Очистить
+                        </button>
+                    </div>
+                    <div id="historyListContainer" class="history-list">
+                        <!-- History items will be injected here -->
+                        <div style="text-align: center; padding: 40px 20px; color: var(--text-secondary);">
+                            <div style="font-size: 32px; margin-bottom: 12px; opacity: 0.3;">📂</div>
+                            <div style="font-size: 13px;">История пока пуста</div>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div id="previewArea" class="preview-panel">
-                <h2 style="font-size: 14px; margin-bottom: 10px; color: #a855f7;">Предпросмотр данных</h2>
-                <div id="previewContent"></div>
-                <button class="btn" id="confirmFillBtn" style="margin-top: 15px;">ПОДТВЕРДИТЬ И ЗАПОЛНИТЬ</button>
+
+            <div class="preview-panel" id="previewArea">
+                <div id="validationSummary"></div>
+                <div id="previewContent">
+                    <div
+                        style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: var(--text-secondary); text-align: center;">
+                        <div style="font-size: 48px; opacity: 0.2; margin-bottom: 24px;">🔍</div>
+                        <div style="font-size: 15px; font-weight: 500; color: #fff;">Ожидание документов</div>
+                        <div style="font-size: 12px; margin-top: 8px; max-width: 200px;">После анализа здесь появятся
+                            извлеченные данные и предпросмотр</div>
+                    </div>
+                </div>
+                <button class="btn" id="confirmFillBtn"
+                    style="display: none; margin-top: 32px; padding: 12px; font-size: 14px; text-transform: none; letter-spacing: 0;">Подтвердить
+                    и заполнить</button>
+            </div>
+        </div>
+
+        <!-- Settings Overlay -->
+        <div id="settingsPanel" class="settings-panel" style="display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px;">
+                <h2 style="margin: 0; font-size: 20px; letter-spacing: -0.5px;">Настройки Профиля</h2>
+                <button id="closeSettingsBtn"
+                    style="background: none; border: none; color: #fff; cursor: pointer; font-size: 24px;">&times;</button>
+            </div>
+
+            <div style="display: flex; flex-direction: column; gap: 20px;">
+                <div class="input-group">
+                    <label>БИН Перевозчика (Гр. 18)</label>
+                    <input type="text" id="prefCarrierBin" placeholder="123456789012">
+                </div>
+                <div class="input-group">
+                    <label>БИН Декларанта (Гр. 14)</label>
+                    <input type="text" id="prefDeclarantBin" placeholder="123456789012">
+                </div>
+                <div style="display: flex; gap: 16px;">
+                    <div class="input-group" style="flex: 1;">
+                        <label>Код поста отпр.</label>
+                        <input type="text" id="prefCustomsCode" placeholder="55302">
+                    </div>
+                    <div class="input-group" style="flex: 1;">
+                        <label>Код поста назн.</label>
+                        <input type="text" id="prefDestCustomsCode" placeholder="55510">
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label>Вид транспорта (31 - Авто)</label>
+                    <input type="text" id="prefTransportMode" placeholder="31">
+                </div>
+
+                <div
+                    style="background: rgba(255,255,255,0.03); border-radius: 16px; padding: 20px; border: 1px solid var(--glass-border);">
+                    <div style="font-size: 13px; font-weight: 600; color: #007AFF; margin-bottom: 16px;">Документы
+                        представителя</div>
+                    <div class="input-group">
+                        <label>№ Свидетельства ТП</label>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" id="prefRepCertNum" style="flex: 2;">
+                            <input type="text" id="prefRepCertDate" placeholder="Дата" style="flex: 1;">
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <label>№ Свидетельства УЭО (09011)</label>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" id="prefAeoCertNum" style="flex: 2;">
+                            <input type="text" id="prefAeoCertDate" placeholder="Дата" style="flex: 1;">
+                        </div>
+                    </div>
+                    <div class="input-group" style="margin-top: 18px;">
+                        <label>Договор экспедирования (11005)</label>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" id="prefExpDogNum" style="flex: 2;">
+                            <input type="text" id="prefExpDogDate" placeholder="Дата" style="flex: 1;">
+                        </div>
+                    </div>
+                </div>
+
+
+            </div>
+
+            <div style="margin-top: 32px; border-top: 1px solid var(--glass-border); padding-top: 24px;">
+                <button class="btn" id="saveSettingsBtn">Сохранить настройки</button>
+                <div id="settingsSaveStatus" class="status"
+                    style="margin-top: 12px; background: rgba(52, 199, 89, 0.1); border-color: rgba(52, 199, 89, 0.2); color: #34C759; text-align: center;">
+                    Настройки успешно сохранены!
+                </div>
             </div>
         </div>
     </div>
 
-
+    <!-- Scripts -->
     <script src="lib/xlsx.full.min.js"></script>
     <script src="lib/pdf.min.js"></script>
     <script src="lib/supabase.js"></script>
@@ -590,5 +886,3 @@
     <script src="popup/bin-checker.js"></script>
     <script src="popup/main.js"></script>
 </body>
-
-</html>

@@ -186,6 +186,59 @@ async function fillCounteragents(params) {
         } catch (destErr) {
             console.error('❌ Destination Customs update failed:', destErr);
         }
+
+        // ОБРАБОТКА ДОКУМЕНТОВ УЭО И ПРЕДСТАВИТЕЛЯ (Warranties, Presentation features, Transport Docs)
+        try {
+            if (params.registry && params.registry.number) {
+                console.log('🏛️ DEBUG: Updating Registry/AEO configuration on main declaration');
+                const currentDecl = await getPIDeclaration(declId, headers);
+
+                // Add presentation feature "06"
+                if (!currentDecl.presentationFeatures) currentDecl.presentationFeatures = [];
+                if (!currentDecl.presentationFeatures.some(f => f.feature && f.feature.code === "06")) {
+                    currentDecl.presentationFeatures.push({
+                        feature: { id: 2058, code: "06" }
+                    });
+                }
+
+                // Add warranties logic
+                if (!currentDecl.warranties) currentDecl.warranties = [];
+                if (currentDecl.warranties.length === 0) {
+                    currentDecl.warranties = [{
+                        indexOrder: 0,
+                        guaranteePresentType: "NO_WARRANTY",
+                        guaranteeFailure: { id: 2089, code: "103" },
+                        warrantyDocs: [{
+                            documentType: { id: 415, code: "09011" },
+                            otherDocNumber: params.registry.number,
+                            otherDocDate: formatToISODate(params.registry.date) || new Date().toISOString().split('T')[0],
+                            mappings: [],
+                            indexOrder: 0
+                        }]
+                    }];
+                }
+
+                // Add transportDocument
+                if (!currentDecl.transportDocument) currentDecl.transportDocument = [];
+                if (!currentDecl.transportDocument.some(d => d.documentType && d.documentType.code === "09011")) {
+                    currentDecl.transportDocument.push({
+                        documentType: { id: 415, code: "09011" },
+                        docNumber: params.registry.number,
+                        docDate: formatToISODate(params.registry.date) || new Date().toISOString().split('T')[0]
+                    });
+                }
+
+                // Also Movement Type TR (if applicable and missing)
+                if (!currentDecl.movementType) {
+                    currentDecl.movementType = { id: 4, code: "TR", shortNameRu: "ТР" };
+                }
+
+                await updatePIDeclaration(declId, currentDecl, headers);
+                console.log('✅ Declaration updated with AEO/Registry config');
+            }
+        } catch (regErr) {
+            console.error('❌ Registry config update failed:', regErr);
+        }
     }
 
 
@@ -637,7 +690,7 @@ async function processBox44Documents(consignmentId, params, productIds, headers)
         });
     }
 
-    // УПАКОВОЧНЫЙ ЛИСТ (04131): Если нет, прикладываем инвойс вместо него
+    // УПАКОВОЧНЫЙ ЛИСТ (04131): Прикладываем инвойс если упаковочного нет (TЗ требование)
     if (!docsToCreate.some(d => d.code === '04131')) {
         const inv = docsToCreate.find(d => d.code === '04021');
         if (inv) {
@@ -654,35 +707,38 @@ async function processBox44Documents(consignmentId, params, productIds, headers)
 
     try {
         const docTypes = await fetchDocumentTypes(headers);
+        const createdDocuments = [];
 
         for (const doc of docsToCreate) {
             const typeInfo = docTypes.find(t => t.code === doc.code);
             if (!typeInfo) {
-                console.warn(`⚠️ Warning: Doc type ${doc.code} not found in classifier, skipping.`);
+                console.warn(`⚠️ Warning: Doc type ${doc.code} not found, skipping.`);
                 continue;
             }
 
             let attachedFiles = [];
 
-            // Пытаемся найти файл и загрузить его, если он не таблица
+            // Пытаемся найти файл и загрузить его
             const matchingFile = rawFiles.find(f => f.name.toLowerCase() === (doc.filename || "").toLowerCase());
             if (matchingFile && matchingFile.base64) {
                 const isSpreadsheet = /\.(xlsx|xls|csv)$/i.test(matchingFile.name);
                 if (!isSpreadsheet) {
-                    console.log(`📤 Uploading file for Box 44: ${matchingFile.name} (Doc ${doc.code})`);
+                    console.log(`📤 Uploading file: ${matchingFile.name} (Code ${doc.code})`);
                     try {
                         const blob = base64ToBlob(matchingFile.base64, matchingFile.mimeType);
                         const fileObj = new File([blob], matchingFile.name, { type: matchingFile.mimeType });
                         const uploadResp = await uploadFile(fileObj, headers);
-                        if (uploadResp && uploadResp[0]) {
-                            attachedFiles = [uploadResp[0]];
-                            console.log(`✅ File attached successfully`);
+
+                        // Fix for uploadResp format (can be array or object)
+                        const fileData = Array.isArray(uploadResp) ? uploadResp[0] : uploadResp;
+
+                        if (fileData && (fileData.id || fileData.fileId)) {
+                            attachedFiles = [fileData];
+                            console.log(`✅ File uploaded and attached`);
                         }
                     } catch (uploadErr) {
-                        console.error(`❌ Failed to upload ${matchingFile.name}:`, uploadErr);
+                        console.error(`❌ Upload failed:`, uploadErr);
                     }
-                } else {
-                    console.log(`ℹ️ Skipping spreadsheet upload for ${matchingFile.name} (not supported by Keden)`);
                 }
             }
 
@@ -694,14 +750,24 @@ async function processBox44Documents(consignmentId, params, productIds, headers)
                 files: attachedFiles
             };
 
-            console.log(`📡 Creating document record: ${doc.code} (${doc.number})`);
             const createdDoc = await postDocument(consignmentId, docPayload, headers);
+            if (createdDoc && createdDoc.id) {
+                createdDocuments.push(createdDoc);
+                console.log(`✅ Document ${doc.code} created: ${createdDoc.id}`);
 
-            if (createdDoc && createdDoc.id && productIds.length > 0) {
-                console.log(`🔗 Mapping document ${createdDoc.id} to products`);
-                await postDocumentMapping(createdDoc.id, productIds, headers);
+                if (productIds && productIds.length > 0) {
+                    try {
+                        await postDocumentMapping(createdDoc.id, productIds, headers);
+                    } catch (mapErr) {
+                        console.warn(`⚠️ Mapping failed for ${createdDoc.id}:`, mapErr);
+                    }
+                }
             }
         }
+
+        // Documents are automatically linked to the consignment via their POST creation.
+        // The previous logic that performed a PUT to the consignment has been removed as it was unnecessary.
+
         console.log('✅ Box 44 automation complete');
     } catch (err) {
         console.error('❌ Box 44 automation failed:', err);

@@ -1,11 +1,4 @@
 /**
- * KEDEN Extension - Admin Auth Module
- * Handles authentication against the admin backend and usage logging
- */
-
-const ADMIN_API_BASE = 'http://localhost:3001';
-
-/**
  * Extracts current Keden user info from the auth-storage in localStorage
  * The token is a JWT that contains user info (iin, fullName, etc.)
  * Also falls back to state.user and state.userAccountData
@@ -13,24 +6,38 @@ const ADMIN_API_BASE = 'http://localhost:3001';
 function extractKedenUserInfo() {
     try {
         const authStorage = localStorage.getItem('auth-storage');
-        if (!authStorage) {
-            console.warn('[Admin Auth] auth-storage not found in localStorage');
-            return null;
+        let state = null;
+        if (authStorage) {
+            try {
+                state = JSON.parse(authStorage).state;
+            } catch (e) {
+                console.warn('[Admin Auth] Failed to parse auth-storage');
+            }
         }
-
-        const state = JSON.parse(authStorage).state;
-        if (!state) return null;
 
         let iin = '';
         let fio = '';
         let token = '';
 
-        // Try to find token in state.token or state.user.token
-        if (state.token) {
-            token = typeof state.token === 'string' ? state.token : (state.token.access_token || state.token.id_token || '');
+        // Try to find token in state or directly in localStorage/sessionStorage
+        if (state) {
+            if (state.token) {
+                token = typeof state.token === 'string' ? state.token : (state.token.access_token || state.token.id_token || '');
+            }
+            if (!token && state.user && state.user.token) {
+                token = state.user.token;
+            }
+            if (!token && state.userAccountData && state.userAccountData.token) {
+                token = state.userAccountData.token;
+            }
         }
-        if (!token && state.user && state.user.token) {
-            token = state.user.token;
+
+        // Fallback to standard names
+        if (!token) {
+            token = localStorage.getItem('token') ||
+                localStorage.getItem('access_token') ||
+                sessionStorage.getItem('token') ||
+                sessionStorage.getItem('access_token');
         }
 
         // Method 1: Decode JWT payload if we found a token
@@ -41,27 +48,27 @@ function extractKedenUserInfo() {
                     const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
                     const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
                         return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-                    }).join(''));
+                    }).slice(0).join(''));
                     const payload = JSON.parse(jsonPayload);
-                    iin = payload.iin || '';
-                    fio = payload.fullName || payload.name || '';
+                    iin = payload.iin || payload.preferred_username || payload.sub || '';
+                    fio = payload.fullName || payload.name || payload.given_name || '';
                 }
             } catch (e) {
                 console.warn('[Admin Auth] JWT decode failed:', e);
             }
         }
 
-        // Method 2: Fallback to state.user data (Keden often stores it here)
-        if (state.user) {
-            iin = iin || state.user.iin || state.user.username || '';
-            fio = fio || state.user.fullName || state.user.name || '';
-        }
-
-        // Method 3: Fallback to state.userAccountData
-        if (!iin && state.userAccountData) {
-            iin = state.userAccountData.iin || '';
-            const ud = state.userAccountData;
-            fio = fio || [ud.lastName, ud.firstName, ud.middleName].filter(Boolean).join(' ');
+        // Method 2: Fallback to state data (Keden often stores it here)
+        if (state) {
+            if (state.user) {
+                iin = iin || state.user.iin || state.user.username || '';
+                fio = fio || state.user.fullName || state.user.name || '';
+            }
+            if (!iin && state.userAccountData) {
+                iin = state.userAccountData.iin || '';
+                const ud = state.userAccountData;
+                fio = fio || [ud.lastName, ud.firstName, ud.middleName].filter(Boolean).join(' ');
+            }
         }
 
         if (!iin && !token) return null;
@@ -81,26 +88,46 @@ function extractKedenUserInfo() {
  * Checks if the current user is authorized to use the extension
  */
 async function checkExtensionAccess() {
-    const userInfo = extractKedenUserInfo();
+    let userInfo = null;
+    let retries = 5;
+
+    // Retry loop to wait for Keden to initialize its localStorage
+    while (!userInfo && retries > 0) {
+        userInfo = extractKedenUserInfo();
+        if (!userInfo) {
+            retries--;
+            if (retries > 0) {
+                console.log(`[Admin Auth] Session not found, retrying in 1s... (${retries} left)`);
+                await new Promise(r => setTimeout(r, 1000));
+            }
+        }
+    }
+
     if (!userInfo || !userInfo.token) {
         return { allowed: false, message: 'Не удалось определить сессию Кедена. Убедитесь что вы авторизованы в ИС Кеден.', userInfo: null };
     }
 
     try {
-        console.log('[Admin Auth] Checking access at:', `${ADMIN_API_BASE}/api/ext/auth`);
-        const resp = await fetch(`${ADMIN_API_BASE}/api/ext/auth`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ token: userInfo.token })
+        // Now calling background script which communicates with Supabase Cloud
+        return new Promise((resolve) => {
+            chrome.runtime.sendMessage({
+                action: 'CHECK_ACCESS',
+                payload: { iin: userInfo.iin, fio: userInfo.fio }
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    resolve({ allowed: true, message: 'Ошибка связи с фоновым скриптом. Режим офлайн.', userInfo, offline: true });
+                    return;
+                }
+                if (response && response.success) {
+                    resolve({ ...response, userInfo });
+                } else {
+                    resolve({ allowed: false, message: response?.error || 'Доступ отклонен облачным сервером.', userInfo });
+                }
+            });
         });
-
-        const data = await resp.json();
-        console.log('[Admin Auth] Server response:', data);
-        return { ...data, userInfo };
     } catch (e) {
-        console.error('[Admin Auth] Backend unreachable:', e);
-        // If admin server is down, allow access (graceful degradation)
-        return { allowed: true, message: 'Сервер администрирования недоступен. Работа в автономном режиме.', userInfo, offline: true };
+        console.error('[Admin Auth] Cloud access check failed:', e);
+        return { allowed: true, message: 'Ошибка проверки доступа. Работа в автономном режиме.', userInfo, offline: true };
     }
 }
 
@@ -112,17 +139,20 @@ async function logExtensionAction(actionType, description = '') {
     if (!userInfo) return;
 
     try {
-        await fetch(`${ADMIN_API_BASE}/api/ext/log`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+        chrome.runtime.sendMessage({
+            action: 'LOG_ACTION',
+            payload: {
                 iin: userInfo.iin,
-                fio: userInfo.fio,
                 action_type: actionType,
                 description: description
-            })
+            }
+        }, () => {
+            if (chrome.runtime.lastError) {
+                console.warn('[Admin Auth] Log send failed (background offline)');
+            }
         });
     } catch (e) {
-        console.warn('[Admin Auth] Log send failed (offline mode):', e.message);
+        console.warn('[Admin Auth] Log send failed:', e.message);
     }
 }
+

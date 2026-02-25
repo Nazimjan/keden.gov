@@ -21,7 +21,9 @@ const INITIAL_STATE = {
     result: null,
     targetTabId: null,
     error: null,
-    timestamp: null
+    timestamp: null,
+    extractionStartTime: null,
+    extractionDuration: null
 };
 
 /**
@@ -70,7 +72,126 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         updateState(INITIAL_STATE).then(() => sendResponse({ success: true }));
         return true;
     }
+
+    if (request.action === 'CHECK_ACCESS') {
+        const { iin } = request.payload;
+        supabaseClient.functions.invoke('extract-ai', {
+            body: { action: 'check_access', iin }
+        })
+            .then(res => {
+                if (res.error) throw new Error(res.error.message);
+                sendResponse({ success: true, ...res.data });
+            })
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    if (request.action === 'LOG_ACTION') {
+        const { iin, action_type, description } = request.payload;
+        supabaseClient.functions.invoke('extract-ai', {
+            body: { action: 'log', iin, action_type, description }
+        })
+            .then(res => sendResponse({ success: true, ...res.data }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    if (request.action === 'ANALYZE_SINGLE') {
+        const { document, iin } = request.payload;
+        handleSingleExtraction(document, iin)
+            .then(result => sendResponse({ success: true, result }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
+
+    if (request.action === 'ANALYZE_BATCH') {
+        const { fileParts, fileNames, iin } = request.payload;
+        // In Supabase, we already have handleExtraction which does storage upload + AI.
+        // But gemini.js might be sending parts directly.
+        // For simplicity, let's just use the existing START_EXTRACTION logic if we can,
+        // or a similar one here if it only expects result without state update.
+        handleExtraction(fileParts.map((p, i) => ({ parts: Array.isArray(p) ? p : [p], fileName: fileNames[i] })), iin)
+            .then(finalResult => sendResponse({ success: true, result: finalResult.mergedData }))
+            .catch(err => sendResponse({ success: false, error: err.message }));
+        return true;
+    }
 });
+
+
+async function handleSingleExtraction(doc, iin) {
+    const storagePaths = [];
+    const originalFileNames = [];
+
+    for (const part of doc.parts) {
+        let blobData, mimeType;
+        if (part.inlineData) {
+            const byteCharacters = atob(part.inlineData.data);
+            blobData = new Uint8Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+                blobData[i] = byteCharacters.charCodeAt(i);
+            }
+            mimeType = part.inlineData.mimeType;
+        } else if (part.text) {
+            blobData = new TextEncoder().encode(part.text);
+            mimeType = 'text/plain';
+        }
+
+        if (blobData) {
+            const fileExt = mimeType === 'text/plain' ? '.txt' : '';
+            const sanitizedBaseName = doc.fileName.replace(/\s+/g, '_').replace(/[^\w.-]/gi, '');
+            const fileName = `${iin}_${Date.now()}_${sanitizedBaseName || 'document'}${fileExt}`;
+            const { data, error } = await supabaseClient.storage.from('documents').upload(fileName, blobData, { contentType: mimeType, upsert: true });
+            if (error) throw new Error(`Ошибка загрузки: ${error.message}`);
+            storagePaths.push(data.path);
+            originalFileNames.push(doc.fileName);
+        }
+    }
+
+    const { data: resultData, error: funcError } = await supabaseClient.functions.invoke('extract-ai', {
+        body: { storagePaths, iin, originalFileNames }
+    });
+    if (funcError) throw new Error(funcError.message);
+
+    return resultData;
+}
+
+/**
+ * Загрузка файла в Supabase Storage с retry при ошибках 5xx (например, HTTP 520 от Cloudflare).
+ * Параметры: до maxRetries попыток, задержка удваивается каждый раз (exponential backoff).
+ */
+async function uploadWithRetry(fileName, blobData, mimeType, originalName, maxRetries = 3) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        const { data, error } = await supabaseClient.storage
+            .from('documents')
+            .upload(fileName, blobData, {
+                contentType: mimeType,
+                upsert: true
+            });
+
+        if (!error) return data; // успех
+
+        lastError = error;
+        const is5xx = error.message && (
+            error.message.includes('520') ||
+            error.message.includes('502') ||
+            error.message.includes('503') ||
+            error.message.includes('504') ||
+            error.message.includes('500')
+        );
+
+        if (!is5xx || attempt === maxRetries) {
+            // Не 5xx или исчерпаны попытки — сразу бросаем
+            throw new Error(`Ошибка загрузки ${originalName}: ${error.message}`);
+        }
+
+        const delay = Math.pow(2, attempt - 1) * 1000; // 1s, 2s, 4s...
+        console.warn(`[Background] Upload attempt ${attempt}/${maxRetries} failed (${error.message}). Retry in ${delay}ms...`);
+        await updateState({ progressMessage: `Повтор загрузки "${originalName}" (попытка ${attempt + 1})...` });
+        await new Promise(r => setTimeout(r, delay));
+    }
+    throw new Error(`Ошибка загрузки ${originalName}: ${lastError?.message}`);
+}
 
 /**
  * Основная логика: Загрузка в Storage + Вызов Edge Function
@@ -81,7 +202,9 @@ async function handleExtraction(documents, iin, targetTabId) {
         progressMessage: 'Загрузка документов в хранилище...',
         targetTabId,
         result: null,
-        error: null
+        error: null,
+        extractionStartTime: Date.now(),
+        extractionDuration: null
     });
 
     try {
@@ -113,15 +236,8 @@ async function handleExtraction(documents, iin, targetTabId) {
 
                     const fileName = `${iin}_${Date.now()}_${sanitizedBaseName || 'document'}${fileExt}`;
 
-                    const { data, error } = await supabaseClient.storage
-                        .from('documents')
-                        .upload(fileName, blobData, {
-                            contentType: mimeType,
-                            upsert: true
-                        });
-
-                    if (error) throw new Error(`Ошибка загрузки ${doc.fileName}: ${error.message}`);
-                    storagePaths.push(data.path);
+                    const uploadedData = await uploadWithRetry(fileName, blobData, mimeType, doc.fileName);
+                    storagePaths.push(uploadedData.path);
                     // Запоминаем оригинальное имя в том же порядке
                     originalFileNames.push(doc.fileName);
                 }
@@ -201,7 +317,33 @@ async function handleExtraction(documents, iin, targetTabId) {
             })
         };
 
-        await updateState({ status: 'SUCCESS', result: finalResult, progressMessage: 'Готово!' });
+        const storedData = await chrome.storage.local.get('extractionState');
+        const startTime = storedData.extractionState?.extractionStartTime;
+        let durationStr = null;
+        if (startTime) {
+            const diffSeconds = (Date.now() - startTime) / 1000;
+            const mins = Math.floor(diffSeconds / 60);
+            const secs = Math.floor(diffSeconds % 60);
+            const ms = Math.floor((diffSeconds % 1) * 10);
+            durationStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${ms}`;
+        }
+
+        const historyItem = {
+            id: Date.now().toString(),
+            timestamp: Date.now(),
+            duration: durationStr,
+            files: documents.map(d => d.fileName),
+            result: finalResult
+        };
+
+        await addToHistory(historyItem);
+
+        await updateState({
+            status: 'SUCCESS',
+            result: finalResult,
+            progressMessage: 'Готово!',
+            extractionDuration: durationStr
+        });
 
         if (targetTabId) {
             chrome.tabs.sendMessage(targetTabId, {
@@ -216,6 +358,18 @@ async function handleExtraction(documents, iin, targetTabId) {
         throw err;
     } finally {
         currentAbortController = null;
+    }
+}
+
+async function addToHistory(item) {
+    try {
+        const { history = [] } = await chrome.storage.local.get('history');
+        // Prepend new item
+        const newHistory = [item, ...history].slice(0, 50); // Keep last 50
+        await chrome.storage.local.set({ history: newHistory });
+        console.log('[Background] History updated, total items:', newHistory.length);
+    } catch (e) {
+        console.error('[Background] Failed to save history:', e);
     }
 }
 

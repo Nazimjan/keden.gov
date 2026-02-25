@@ -12,8 +12,8 @@ const { FILE_AGENT_PROMPT, getBatchPrompt } = require('./prompts');
 // ─── Конфигурация (переменные окружения → env-файл на сервере) ────────────────
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const MODEL_VISION = process.env.AI_MODEL_VISION || 'qwen/qwen3.5-plus-02-15';
-const MODEL_TEXT = process.env.AI_MODEL_TEXT || 'qwen/qwen3.5-plus-02-15'; // Ранее был minimax
+const MODEL_VISION = process.env.AI_MODEL_VISION || 'google/gemini-3-flash-preview';
+const MODEL_TEXT = process.env.AI_MODEL_TEXT || 'google/gemini-3-flash-preview'; // Ранее был minimax
 const MAX_RETRIES = 3;
 // ─────────────────────────────────────────────────────────────────────────────
 

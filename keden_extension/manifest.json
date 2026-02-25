@@ -1,6 +1,6 @@
 {
     "manifest_version": 3,
-    "name": "Keden PI Autofill Premium",
+    "name": "Keden Assistant",
     "version": "1.0",
     "description": "AI-powered PI declaration filler using Qwen 3.5",
     "permissions": [
@@ -35,6 +35,7 @@
                 "content/mappers.js",
                 "content/api.js",
                 "content/enrichment.js",
+                "content/keep_alive.js",
                 "content/main.js"
             ]
         }
