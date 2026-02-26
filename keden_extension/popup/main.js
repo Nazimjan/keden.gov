@@ -220,7 +220,7 @@ function showAccessDenied(message) {
     // Register state listener for background process
     chrome.storage.onChanged.addListener((changes, area) => {
         if (area === 'local' && changes.extractionState) {
-            console.log('[Popup] State changed in storage:', changes.extractionState.newValue.status);
+
             handleStateUpdate(changes.extractionState.newValue);
         }
     });
@@ -228,7 +228,7 @@ function showAccessDenied(message) {
     // Backup: explicit message from background
     chrome.runtime.onMessage.addListener((msg) => {
         if (msg.action === 'STATE_UPDATED') {
-            console.log('[Popup] Received direct state update message:', msg.state.status);
+
             handleStateUpdate(msg.state);
         }
     });
@@ -245,7 +245,7 @@ function showAccessDenied(message) {
             (now - extractionState.timestamp > 300000); // 5 минут
 
         if (isStuck) {
-            console.log('[Init] Detected stuck extraction state, resetting...');
+
             chrome.runtime.sendMessage({ action: 'RESET_STATE' });
         } else {
             handleStateUpdate(extractionState);
@@ -496,6 +496,8 @@ document.getElementById('confirmFillBtn').onclick = async () => {
             if (kedenTab) tab = kedenTab;
             else throw new Error('Откройте вкладку Keden с ПИ декларацией');
         }
+
+
 
         chrome.tabs.sendMessage(tab.id, { action: 'FILL_PI_DATA', data: scrapedData }, (response) => {
             if (chrome.runtime.lastError) {

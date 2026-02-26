@@ -11,7 +11,7 @@ async function fetchUchetKzInfo(bin) {
     // Sanitize BIN: keep only digits
     const cleanBin = (bin || '').replace(/\D/g, '');
     if (cleanBin.length !== 12) {
-        console.log(`⚠️ BIN ${bin} is invalid (must be 12 digits)`);
+
         return null;
     }
 
@@ -103,11 +103,11 @@ async function enrichFieldByBIN(bin, type) {
         return;
     }
 
-    console.log(`🔍 Проверка БИН ${cleanBin} на uchet.kz...`);
+
     const info = await fetchUchetKzInfo(cleanBin);
 
     if (info && info.name) {
-        console.log(`✅ Найдено для ${cleanBin}: ${info.name}`);
+
 
         // 1. Обновляем UI (Успех)
         const nameInput = document.getElementById(`prev-agent-name-${type}`);
@@ -157,11 +157,11 @@ async function enrichFieldByBIN(bin, type) {
                         agent.entityType = 'LEGAL';
                     }
                 }
-                console.log(`💾 Данные ${type} обновлены в currentAIData`);
+
             }
         }
     } else {
-        console.log(`ℹ️ БИН ${cleanBin} не найден в базе uchet.kz`);
+
         // Если БИН не найден — красим в красный
         if (binInput) {
             binInput.style.borderColor = '#ef4444';

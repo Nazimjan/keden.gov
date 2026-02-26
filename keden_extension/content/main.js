@@ -2,13 +2,13 @@ const VERSION = '1.2.0';
 
 // RUN AUTO-CHECK ON LOAD
 (async () => {
-    console.log(`[Keden] Extension v${VERSION} loaded`);
+
     try {
         const auth = await checkExtensionAccess();
         if (auth && auth.allowed) {
-            console.log('[Keden] Welcome, ' + auth.fio + '. Credits remain: ' + (auth.credits || 0));
+
         } else {
-            console.warn('[Keden] Access restricted:', auth?.message);
+
         }
     } catch (e) {
         console.error('[Keden] Initialization auth check failed:', e);
@@ -74,7 +74,7 @@ function formatToISODate(dateStr) {
 }
 
 async function fillCounteragents(params) {
-    console.log('🧪 DEBUG: Starting counteragents fill');
+
 
     const match = window.location.href.match(/declarations\/PI\/\d+\/([A-Z0-9]+)/);
     if (!match) throw new Error("Откройте страницу ПИ");
@@ -87,6 +87,17 @@ async function fillCounteragents(params) {
 
     // Инициализация справочника стран (диномическая загрузка с кэшем)
     await window.getCountries(headers);
+
+    // Normalize params in case it contains mergedData (sent directly from background)
+    if (params && params.mergedData) {
+        const merged = params.mergedData;
+        params = {
+            ...merged,
+            documents: params.documents || merged.documents,
+            rawFiles: params.rawFiles || merged.rawFiles,
+            validation: params.validation || merged.validation
+        };
+    }
 
     const counteragents = params && params.counteragents ? params.counteragents : {};
 
@@ -245,11 +256,15 @@ async function fillCounteragents(params) {
     }
 
 
+    let consignmentId = null;
+    const consMatch = window.location.href.match(/consignment\/([A-Z0-9]+)/);
+    if (consMatch) consignmentId = consMatch[1];
+
     const hasConsignmentAgents = Boolean(counteragents.consignor?.present || counteragents.consignee?.present);
     const hasProducts = Boolean(params.products && params.products.length > 0);
+    const hasDocs = Boolean((params.documents && params.documents.length > 0) || (params.rawFiles && params.rawFiles.length > 0));
 
-    let consignmentId = null;
-    if (hasConsignmentAgents || hasProducts) {
+    if ((hasConsignmentAgents || hasProducts || hasDocs) && !consignmentId) {
         const consignmentPayload = {
             preliminaryId: declId,
             indexOrder: 0
@@ -645,10 +660,16 @@ async function fillCounteragents(params) {
 }
 
 async function processBox44Documents(consignmentId, params, productIds, headers) {
-    console.log('📑 DEBUG: Automating Box 44 Documents');
+    console.log('📑 DEBUG: processBox44Documents starting', {
+        consignmentId,
+        docsToCreateInParams: params.documents?.length || 0,
+        rawFilesCount: (params.rawFiles || []).length
+    });
 
     const docsToCreate = [];
     const rawFiles = params.rawFiles || [];
+
+    console.log('📂 Available files in rawFiles:', rawFiles.map(f => f.name));
 
     // Combine documents from Gemini analysis
     if (params.documents && Array.isArray(params.documents)) {
@@ -677,7 +698,8 @@ async function processBox44Documents(consignmentId, params, productIds, headers)
                     number: d.number || "Б/Н",
                     date: d.date || "Б/Д",
                     name: d.type,
-                    filename: d.filename
+                    filename: d.filename,
+                    groupId: d.groupId || null
                 });
             }
         });
@@ -697,7 +719,7 @@ async function processBox44Documents(consignmentId, params, productIds, headers)
     if (!docsToCreate.some(d => d.code === '04131')) {
         const inv = docsToCreate.find(d => d.code === '04021');
         if (inv) {
-            console.log('ℹ️ Packing list absent, using invoice as fallback for 04131');
+
             docsToCreate.push({
                 ...inv,
                 code: '04131',
@@ -710,68 +732,84 @@ async function processBox44Documents(consignmentId, params, productIds, headers)
 
     try {
         const docTypes = await fetchDocumentTypes(headers);
-        const createdDocuments = [];
+        const type10022 = docTypes.find(t => t.code === '10022');
+
+        // Grouping logic
+        const groups = {}; // { groupId: { docs: [] } }
 
         for (const doc of docsToCreate) {
-            const typeInfo = docTypes.find(t => t.code === doc.code);
-            if (!typeInfo) {
-                console.warn(`⚠️ Warning: Doc type ${doc.code} not found, skipping.`);
-                continue;
+            let gId = doc.groupId;
+            if (!gId) {
+                // Auto-group by code + number + date
+                const cleanNum = (doc.number || '').trim().toLowerCase();
+                const cleanDate = (doc.date || '').trim();
+                gId = `auto_${doc.code}_${cleanNum}_${cleanDate}`;
             }
+            if (!groups[gId]) groups[gId] = { docs: [] };
+            groups[gId].docs.push(doc);
+        }
 
-            let attachedFiles = [];
+        // Process Groups
+        for (const gId in groups) {
+            const group = groups[gId];
+            const firstDoc = group.docs[0];
+            const bestCode = firstDoc.code;
 
-            // Пытаемся найти файл и загрузить его
-            const matchingFile = rawFiles.find(f => f.name.toLowerCase() === (doc.filename || "").toLowerCase());
-            if (matchingFile && matchingFile.base64) {
-                const isSpreadsheet = /\.(xlsx|xls|csv)$/i.test(matchingFile.name);
-                if (!isSpreadsheet) {
-                    console.log(`📤 Uploading file: ${matchingFile.name} (Code ${doc.code})`);
+
+
+            const attachedFiles = [];
+            for (let i = 0; i < group.docs.length; i++) {
+                const doc = group.docs[i];
+
+                const searchName = (doc.filename || "").toLowerCase().trim();
+                const matchingFile = rawFiles.find(f => {
+                    const fName = (f.name || "").toLowerCase().trim();
+                    return fName === searchName || fName.includes(searchName) || searchName.includes(fName);
+                });
+
+                if (matchingFile && matchingFile.base64) {
+
                     try {
                         const blob = base64ToBlob(matchingFile.base64, matchingFile.mimeType);
                         const fileObj = new File([blob], matchingFile.name, { type: matchingFile.mimeType });
                         const uploadResp = await uploadFile(fileObj, headers);
-
-                        // Fix for uploadResp format (can be array or object)
                         const fileData = Array.isArray(uploadResp) ? uploadResp[0] : uploadResp;
 
                         if (fileData && (fileData.id || fileData.fileId)) {
-                            attachedFiles = [fileData];
-                            console.log(`✅ File uploaded and attached`);
+                            fileData.uid = `__AUTO__${Date.now()}_${i}__`;
+                            attachedFiles.push(fileData);
+
                         }
-                    } catch (uploadErr) {
-                        console.error(`❌ Upload failed:`, uploadErr);
+                    } catch (err) {
+                        console.error(`    ❌ File upload failed:`, err);
                     }
                 }
             }
 
-            const docPayload = {
-                documentType: typeInfo,
-                docNumber: doc.number,
-                docDate: doc.date === "Б/Д" ? null : formatToISODate(doc.date),
-                regKindCode: doc.code === '09011' ? "1" : null,
-                files: attachedFiles
-            };
+            // Create document if we have files OR if it's a Registry with a number
+            if (attachedFiles.length > 0 || (bestCode === '09011' && firstDoc.number && firstDoc.number !== 'Б/Н')) {
+                const typeInfo = docTypes.find(t => t.code === bestCode) || type10022 || { id: 457, code: "10022" };
 
-            const createdDoc = await postDocument(consignmentId, docPayload, headers);
-            if (createdDoc && createdDoc.id) {
-                createdDocuments.push(createdDoc);
-                console.log(`✅ Document ${doc.code} created: ${createdDoc.id}`);
+                const docPayload = {
+                    documentType: typeInfo,
+                    docNumber: firstDoc.number || "б/н",
+                    docDate: (firstDoc.date && firstDoc.date !== "Б/Д" && firstDoc.date !== "б/д") ? formatToISODate(firstDoc.date) : null,
+                    regKindCode: bestCode === '09011' ? "1" : null,
+                    files: attachedFiles
+                };
 
-                if (productIds && productIds.length > 0) {
-                    try {
-                        await postDocumentMapping(createdDoc.id, productIds, headers);
-                    } catch (mapErr) {
-                        console.warn(`⚠️ Mapping failed for ${createdDoc.id}:`, mapErr);
+                const createdDoc = await postDocument(consignmentId, docPayload, headers);
+                if (createdDoc && createdDoc.id) {
+
+                    if (productIds && productIds.length > 0) {
+                        await postDocumentMapping(createdDoc.id, productIds, headers).catch(() => { });
                     }
                 }
+            } else {
+                console.warn(`  ⚠️ Group ${gId} skipped: No files matched and not a valid Registry.`);
             }
         }
 
-        // Documents are automatically linked to the consignment via their POST creation.
-        // The previous logic that performed a PUT to the consignment has been removed as it was unnecessary.
-
-        console.log('✅ Box 44 automation complete');
     } catch (err) {
         console.error('❌ Box 44 automation failed:', err);
     }

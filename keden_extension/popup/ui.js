@@ -79,14 +79,21 @@ let _timerStartTime = null;
 function showLoading(show, message, forcedStartTime = null) {
     const loader = document.getElementById('loader');
     const startBtn = document.getElementById('startBtn');
+    const confirmBtn = document.getElementById('confirmFillBtn');
+
     if (loader) loader.style.display = show ? 'block' : 'none';
     if (startBtn) startBtn.disabled = show;
+    if (confirmBtn) confirmBtn.disabled = show;
 
     const previewContent = document.getElementById('previewContent');
     const existingTimer = document.getElementById('aiTimer');
 
     if (show) {
-        if (previewContent && !existingTimer) {
+        // Only wipe previewContent if it's for initial analysis (not filling)
+        // or if it doesn't have the timer yet.
+        const isFilling = message && message.includes('Заполнение');
+
+        if (previewContent && !existingTimer && !isFilling) {
             previewContent.innerHTML = `
                 <div id="centralStatusOverlay" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 320px; text-align: center; animation: fadeIn 0.4s ease-out;">
                     <div class="loader central-spinner" style="display: block; margin-bottom: 28px; width: 48px; height: 48px; border-width: 4px; border-top-color: #007AFF;"></div>
@@ -99,10 +106,17 @@ function showLoading(show, message, forcedStartTime = null) {
                     </div>
                 </div>
             `;
-        } else if (existingTimer) {
-            // Just update the message if it's already showing
+        } else if (existingTimer || isFilling) {
+            // Update the status on existing loader or show a non-destructive status
             const statusEl = document.getElementById('loaderStatus');
-            if (statusEl) statusEl.innerText = message || 'AI анализирует документы...';
+            if (statusEl) {
+                statusEl.innerText = message || 'AI анализирует документы...';
+            } else if (isFilling) {
+                // If we are filling but no central overlay exists (already succeeded analysis), 
+                // we might want to just show a notification or a small spinner.
+                // For now, let's keep it simple and just set the status message area.
+                setStatus(message);
+            }
         }
         startTimer(forcedStartTime);
     } else {
@@ -501,7 +515,7 @@ function renderPreview(aiResponse) {
                     <line x1="5" y1="12" x2="19" y2="12"></line>
                 </svg>
             </button>
-            <input type="file" id="manualDocInput" hidden accept=".pdf,.png,.jpg,.jpeg">
+            <input type="file" id="manualDocInput" hidden accept=".pdf,.png,.jpg,.jpeg" multiple>
         </div>
     `;
 
@@ -531,7 +545,9 @@ function renderPreview(aiResponse) {
         row.style.alignItems = 'center';
         row.style.marginBottom = '8px';
         row.style.padding = '10px';
-        row.dataset.filename = doc.filename;
+        row.dataset.filename = (doc.filename || "").trim();
+        const trimmedFilename = (doc.filename || "").trim();
+        if (doc.groupId) row.dataset.groupId = doc.groupId;
 
         const typeOptions = [
             { val: '04021', label: 'Инвойс (04021)' },
@@ -591,75 +607,81 @@ function renderPreview(aiResponse) {
     addDocBtn.onclick = () => manualDocInput.click();
 
     manualDocInput.onchange = async (e) => {
-        const file = e.target.files[0];
-        if (!file) return;
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
 
-        setStatus(`⌛ Анализ нового файла: ${file.name}...`);
-        try {
-            const base64 = await fileToBase64(file);
-            let filePart;
-            if (file.name.toLowerCase().endsWith('.pdf')) {
-                try {
-                    const text = await readPDF(file);
-                    filePart = { text: `--- FILE: ${file.name} (PDF Content) --- \n${text}\n` };
-                } catch (err) {
-                    filePart = { inlineData: { data: base64, mimeType: 'application/pdf' } };
+        const groupId = files.length > 1 ? Date.now() : null;
+
+        for (const file of files) {
+            setStatus(`⌛ Анализ нового файла: ${file.name}...`);
+            try {
+                const base64 = await fileToBase64(file);
+                let filePart;
+                if (file.name.toLowerCase().endsWith('.pdf')) {
+                    try {
+                        const text = await readPDF(file);
+                        filePart = { text: `--- FILE: ${file.name} (PDF Content) --- \n${text}\n` };
+                    } catch (err) {
+                        filePart = { inlineData: { data: base64, mimeType: 'application/pdf' } };
+                    }
+                } else {
+                    filePart = { inlineData: { data: base64, mimeType: file.type || 'image/jpeg' } };
                 }
-            } else {
-                filePart = { inlineData: { data: base64, mimeType: file.type || 'image/jpeg' } };
-            }
 
-            const docPayload = {
-                fileName: file.name,
-                parts: [filePart]
-            };
+                const docPayload = {
+                    fileName: file.name,
+                    parts: [filePart]
+                };
 
-            const response = await chrome.runtime.sendMessage({
-                action: 'ANALYZE_SINGLE',
-                payload: {
-                    document: docPayload,
-                    iin: currentUserInfo ? currentUserInfo.iin : '000000000000'
+                const response = await chrome.runtime.sendMessage({
+                    action: 'ANALYZE_SINGLE',
+                    payload: {
+                        document: docPayload,
+                        iin: currentUserInfo ? currentUserInfo.iin : '000000000000'
+                    }
+                });
+
+                if (!response || !response.success) {
+                    throw new Error(response?.error || 'Unknown extractions error');
                 }
-            });
 
-            if (!response || !response.success) {
-                throw new Error(response?.error || 'Unknown extractions error');
+                const result = response.result;
+
+                // ИИ теперь возвращает массив documents
+                const docObj = (result.documents && result.documents.length > 0)
+                    ? result.documents[0]
+                    : (result.document || {});
+
+                const newDoc = {
+                    filename: file.name,
+                    type: docObj.type || 'OTHER',
+                    number: docObj.number || '',
+                    date: docObj.date || '',
+                    groupId: groupId
+                };
+
+                // Add to current data
+                const newIdx = currentAIData.documents.length;
+                currentAIData.documents.push(newDoc);
+
+                // Add raw file for upload
+                currentAIData.rawFiles.push({
+                    name: file.name,
+                    base64: base64,
+                    mimeType: file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
+                    isBinary: true,
+                    groupId: groupId
+                });
+
+                addDocRow(newDoc, newIdx);
+                setStatus(`✅ Файл ${file.name} добавлена.`);
+            } catch (err) {
+                console.error(err);
+                setStatus(`❌ Ошибка анализа файла ${file.name}: ${err.message}`);
             }
-
-            const result = response.result;
-
-            // ИИ теперь возвращает массив documents
-            const docObj = (result.documents && result.documents.length > 0)
-                ? result.documents[0]
-                : (result.document || {});
-
-            const newDoc = {
-                filename: file.name,
-                type: docObj.type || 'OTHER',
-                number: docObj.number || '',
-                date: docObj.date || ''
-            };
-
-            // Add to current data
-            const newIdx = currentAIData.documents.length;
-            currentAIData.documents.push(newDoc);
-
-            // Add raw file for upload
-            currentAIData.rawFiles.push({
-                name: file.name,
-                base64: base64,
-                mimeType: file.type || (file.name.toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
-                isBinary: true
-            });
-
-            addDocRow(newDoc, newIdx);
-            setStatus(`✅ Файл ${file.name} добавлен и распознан.`);
-        } catch (err) {
-            console.error(err);
-            setStatus(`❌ Ошибка анализа файла: ${err.message}`);
-        } finally {
-            e.target.value = ''; // Reset input to allow selecting same file again
         }
+        setStatus(`✅ Добавлено ${files.length} файл(ов).`);
+        e.target.value = ''; // Reset input
     };
 
     // 1. Vehicles Section
@@ -1161,12 +1183,14 @@ function scrapePreviewData() {
         const dateInput = row.querySelector('.doc-date-input');
         const filename = row.dataset.filename;
 
-        activeFilenames.add(filename);
+        const trimmedFilename = (filename || "").trim();
+        activeFilenames.add(trimmedFilename);
         updatedDocuments.push({
-            filename: filename,
+            filename: trimmedFilename,
             type: typeSelect.value,
             number: numInput.value,
-            date: dateInput.value
+            date: dateInput.value,
+            groupId: row.dataset.groupId || null
         });
     });
 
@@ -1174,7 +1198,7 @@ function scrapePreviewData() {
 
     // Filter rawFiles to only include those still in the documents list
     if (newData.rawFiles) {
-        newData.rawFiles = newData.rawFiles.filter(f => activeFilenames.has(f.name));
+        newData.rawFiles = newData.rawFiles.filter(f => activeFilenames.has((f.name || "").trim()));
     }
 
     // Registry scraping moved to documents list above

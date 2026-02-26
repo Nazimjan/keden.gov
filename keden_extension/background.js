@@ -351,7 +351,7 @@ async function handleExtraction(documents, iin, targetTabId) {
         if (targetTabId) {
             chrome.tabs.sendMessage(targetTabId, {
                 action: 'FILL_PI_DATA',
-                data: finalResult.mergedData
+                data: finalResult
             }).catch(e => console.warn('Could not inject to tab:', e));
         }
 
@@ -370,7 +370,7 @@ async function addToHistory(item) {
         // Prepend new item
         const newHistory = [item, ...history].slice(0, 50); // Keep last 50
         await chrome.storage.local.set({ history: newHistory });
-        console.log('[Background] History updated, total items:', newHistory.length);
+
     } catch (e) {
         console.error('[Background] Failed to save history:', e);
     }
@@ -380,7 +380,7 @@ async function addToHistory(item) {
 // Active FETCH/SSE keeps it alive for 30s-5min, but we can also use Alarms if needed.
 chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === 'keepAlive') {
-        console.log('[Background] Keep-alive tick');
+
     }
 });
 
