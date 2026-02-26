@@ -19,7 +19,7 @@ async function getKedenUserInfo() {
 
         const results = await chrome.scripting.executeScript({
             target: { tabId: kedenTab.id },
-            func: () => {
+            func: async () => {
                 try {
                     const authStorage = localStorage.getItem('auth-storage');
                     let state = null;
@@ -74,6 +74,24 @@ async function getKedenUserInfo() {
                             iin = iin || state.userAccountData.iin || '';
                             const ud = state.userAccountData;
                             fio = fio || [ud.lastName, ud.firstName, ud.middleName].filter(Boolean).join(' ');
+                        }
+                    }
+
+                    // Method 3: Fetch profile directly using the token to get actual FIO
+                    if (token) {
+                        try {
+                            const res = await fetch('https://keden.kgd.gov.kz/api/v1/auth/user-profile', {
+                                headers: { 'Authorization': `Bearer ${token}` }
+                            });
+                            if (res.ok) {
+                                const data = await res.json();
+                                if (data.iin) iin = data.iin;
+                                if (data.lastName || data.firstName) {
+                                    fio = [data.lastName, data.firstName, data.middleName].filter(Boolean).join(' ');
+                                }
+                            }
+                        } catch (e) {
+                            console.warn('[Admin Auth] Profile fetch failed:', e);
                         }
                     }
 

@@ -3,7 +3,7 @@
  * The token is a JWT that contains user info (iin, fullName, etc.)
  * Also falls back to state.user and state.userAccountData
  */
-function extractKedenUserInfo() {
+async function extractKedenUserInfo() {
     try {
         const authStorage = localStorage.getItem('auth-storage');
         let state = null;
@@ -71,6 +71,24 @@ function extractKedenUserInfo() {
             }
         }
 
+        // Method 3: Fetch profile directly using the token to get actual FIO
+        if (token) {
+            try {
+                const res = await fetch('https://keden.kgd.gov.kz/api/v1/auth/user-profile', {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.iin) iin = data.iin;
+                    if (data.lastName || data.firstName) {
+                        fio = [data.lastName, data.firstName, data.middleName].filter(Boolean).join(' ');
+                    }
+                }
+            } catch (e) {
+                console.warn('[Admin Auth] Profile fetch failed:', e);
+            }
+        }
+
         if (!iin && !token) return null;
 
         return {
@@ -93,7 +111,7 @@ async function checkExtensionAccess() {
 
     // Retry loop to wait for Keden to initialize its localStorage
     while (!userInfo && retries > 0) {
-        userInfo = extractKedenUserInfo();
+        userInfo = await extractKedenUserInfo();
         if (!userInfo) {
             retries--;
             if (retries > 0) {
@@ -135,7 +153,7 @@ async function checkExtensionAccess() {
  * Sends a log entry to the admin backend
  */
 async function logExtensionAction(actionType, description = '') {
-    const userInfo = extractKedenUserInfo();
+    const userInfo = await extractKedenUserInfo();
     if (!userInfo) return;
 
     try {
