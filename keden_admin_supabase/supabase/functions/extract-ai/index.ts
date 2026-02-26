@@ -1,14 +1,13 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getBatchPrompt } from "./prompts.ts";
+import { mergeAgentResults } from "./merger.ts";
 
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 /**
  * Base64 Encoding TransformStream
- * Handles binary chunks and encodes them to Base64 on the fly.
- * Maintains a small buffer (max 2 bytes) for groups of 3 bytes.
  */
 class Base64TransformStream extends TransformStream<Uint8Array, string> {
     constructor() {
@@ -17,7 +16,6 @@ class Base64TransformStream extends TransformStream<Uint8Array, string> {
 
         super({
             transform(chunk, controller) {
-                // Concatenate leftovers from previous chunk
                 const data = new Uint8Array(partial.length + chunk.length);
                 data.set(partial);
                 data.set(chunk, partial.length);
@@ -69,7 +67,7 @@ class Base64TransformStream extends TransformStream<Uint8Array, string> {
 const sse = (event: string, data: any) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
 
 /**
- * JSON Repair & Safe Parse (ported from client-side gemini.js)
+ * JSON Repair & Safe Parse
  */
 function repairJSON(text: string) {
     let stack = [];
@@ -158,7 +156,6 @@ serve(async (req) => {
         const url = new URL(req.url);
         const isStreamAction = req.headers.get("x-action") === "extract-stream" || req.headers.get("content-type") === "application/octet-stream";
 
-        // 1. Initial Data Extraction (Header-based for streams, Body-based for JSON)
         let iin: string | null = null;
         let fio: string = "Пользователь";
         let action: string = "extract";
@@ -178,16 +175,13 @@ serve(async (req) => {
         const supabaseUrl = Deno.env.get("SUPABASE_URL");
         const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
-        if (!supabaseUrl || !supabaseKey || supabaseKey.includes("YOUR_SERVICE_ROLE")) {
-            console.error("Missing or Placeholder Environment Variables", { supabaseUrl: !!supabaseUrl, isPlaceholder: supabaseKey?.includes("YOUR_SERVICE_ROLE") });
-            throw new Error(`System Configuration Error: Supabase environment variables are missing or use placeholders.`);
+        if (!supabaseUrl || !supabaseKey) {
+            throw new Error(`System Configuration Error: Supabase environment variables are missing.`);
         }
 
-        console.log(`Supabase Client initialized. URL: ${supabaseUrl}, Key starts with: ${supabaseKey.substring(0, 5)}...`);
         const supabase = createClient(supabaseUrl, supabaseKey);
 
-        // 2. Auth & Credits Check
-        console.log("Checking user in DB for IIN:", iin);
+        // Auth & Credits Check
         let { data: user, error: userError } = await supabase
             .from("users")
             .select("*")
@@ -195,45 +189,27 @@ serve(async (req) => {
             .single();
 
         if (userError) {
-            console.error("User lookup error:", userError.message);
-            // Try to create user if not found
             const { data: newUser, error: createError } = await supabase
                 .from("users")
                 .insert({ iin, fio, credits: 10, is_allowed: true })
                 .select().single();
 
-            if (createError) {
-                console.error("User creation error:", createError.message);
-                throw new Error(`Database Error: ${createError.message}`);
-            }
+            if (createError) throw new Error(`Database Error: ${createError.message}`);
             user = newUser;
         }
 
-        // 2. Access Check Helper (Shared)
         const checkAndDeductCredits = async () => {
             if (!user.is_allowed) throw new Error("Доступ заблокирован");
             const now = new Date();
             const hasSubscription = user.subscription_end && new Date(user.subscription_end) > now;
+            if (hasSubscription) return true;
 
-            if (hasSubscription) return true; // Unlimited for subscribers
-
-            // Atomic credit deduction via PostgreSQL function
-            // This prevents race conditions and handles "credits > 0" check in one transaction
-            const { data: updatedUser, error: rpcError } = await supabase.rpc('deduct_credit', {
-                user_id: user.id
-            });
-
-            if (rpcError || !updatedUser || (Array.isArray(updatedUser) && updatedUser.length === 0)) {
-                console.error("RPC Credit Deduction Error:", rpcError?.message || "User not returned");
-                throw new Error("Недостаточно кредитов или ошибка списания. Пожалуйста, пополните баланс.");
-            }
-
-            // Update local user object with the new credit state (RPC returns an array for SETOF)
+            const { data: updatedUser, error: rpcError } = await supabase.rpc('deduct_credit', { user_id: user.id });
+            if (rpcError || !updatedUser) throw new Error("Недостаточно кредитов");
             user = Array.isArray(updatedUser) ? updatedUser[0] : updatedUser;
             return false;
         };
 
-        // Action: Check Access
         if (action === "check_access") {
             const now = new Date();
             const hasSubscription = user.subscription_end && new Date(user.subscription_end) > now;
@@ -246,7 +222,22 @@ serve(async (req) => {
             }), { headers: corsHeaders });
         }
 
-        // Action: Log (Non-streaming)
+        // Diagnostic Action: get_my_logs
+        if (action === "get_my_logs") {
+            const { data: userLogs } = await supabase
+                .from("logs")
+                .select("*")
+                .eq("user_iin", iin)
+                .order("created_at", { ascending: false })
+                .limit(50);
+
+            return new Response(JSON.stringify({
+                logs: userLogs,
+                credits: user.credits,
+                fio: user.fio
+            }), { headers: corsHeaders });
+        }
+
         if (action === "log" && jsonBody) {
             const { action_type, description } = jsonBody;
             await supabase.from("logs").insert({
@@ -257,39 +248,23 @@ serve(async (req) => {
             return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
         }
 
-        // CORE LOGIC: Streaming Extraction
+        // Action: extract-stream (Single File Streaming)
         if (action === "extract-stream") {
-            // Check & Deduct UPFRONT to avoid race conditions
             await checkAndDeductCredits();
-
             const fileName = req.headers.get("x-file-name") || "document";
             const fileType = req.headers.get("x-file-type") || "image/jpeg";
             const promptStr = getBatchPrompt([fileName]);
 
-            // Create SSE Channel
             const { readable, writable } = new TransformStream();
             const writer = writable.getWriter();
             const encoder = new TextEncoder();
 
-            const sendSSE = (event: string, data: any) => {
-                writer.write(encoder.encode(sse(event, data)));
-            };
-
-            // Process in background
             (async () => {
                 const pingInterval = setInterval(() => {
-                    try {
-                        writer.write(encoder.encode(": keep-alive\n\n"));
-                    } catch {
-                        clearInterval(pingInterval);
-                    }
+                    try { writer.write(encoder.encode(": keep-alive\n\n")); } catch { clearInterval(pingInterval); }
                 }, 15000);
 
                 try {
-                    sendSSE("status", { message: "Starting streaming transfer..." });
-
-                    // 1. Prepare Composite Request Stream for OpenRouter (SAFER JSON)
-                    const streamPlaceholder = "__BASE64_STREAM_CONTENT__";
                     const bodyTemplate = {
                         model: "google/gemini-3-flash-preview",
                         stream: true,
@@ -298,13 +273,12 @@ serve(async (req) => {
                             role: "user",
                             content: [
                                 { type: "text", text: promptStr },
-                                { type: "image_url", image_url: { url: `data:${fileType};base64,${streamPlaceholder}` } }
+                                { type: "image_url", image_url: { url: `data:${fileType};base64,__BASE64_STREAM_CONTENT__` } }
                             ]
                         }]
                     };
 
-                    const fullJsonTemplate = JSON.stringify(bodyTemplate);
-                    const [jsonStart, jsonEnd] = fullJsonTemplate.split(streamPlaceholder);
+                    const [jsonStart, jsonEnd] = JSON.stringify(bodyTemplate).split("__BASE64_STREAM_CONTENT__");
 
                     const openRouterStream = new ReadableStream({
                         async start(controller) {
@@ -321,8 +295,6 @@ serve(async (req) => {
                         }
                     });
 
-                    sendSSE("status", { message: "Uploading to AI..." });
-
                     const aiRes = await fetch(OPENROUTER_URL, {
                         method: "POST",
                         headers: {
@@ -331,14 +303,12 @@ serve(async (req) => {
                             "HTTP-Referer": "https://keden.kgd.gov.kz",
                         },
                         body: openRouterStream,
-                        // @ts-ignore: duplex is required for streaming in Deno/Fetch
-                        // See: https://github.com/denoland/deno/issues/16654
+                        // @ts-ignore
                         duplex: "half"
                     });
 
                     if (!aiRes.ok) throw new Error(`OpenRouter error: ${aiRes.statusText}`);
 
-                    sendSSE("status", { message: "AI is analyzing..." });
                     const aiReader = aiRes.body!.getReader();
                     while (true) {
                         const { done, value } = await aiReader.read();
@@ -346,21 +316,13 @@ serve(async (req) => {
                         writer.write(value);
                     }
 
-                    // Post-processing Task
-                    const logTask = (async () => {
-                        await supabase.from("logs").insert({
-                            user_iin: iin,
-                            action_type: "AI_STREAM_EXTRACT",
-                            description: `Streamed file: ${fileName}`
-                        });
-                    })();
-
-                    // @ts-ignore
-                    if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(logTask);
-                    else await logTask;
-
+                    await supabase.from("logs").insert({
+                        user_iin: iin,
+                        action_type: "AI_STREAM_EXTRACT",
+                        description: `Streamed file: ${fileName}`
+                    });
                 } catch (e: any) {
-                    sendSSE("error", { message: e.message });
+                    writer.write(encoder.encode(sse("error", { message: e.message })));
                 } finally {
                     clearInterval(pingInterval);
                     try { writer.close(); } catch { }
@@ -368,64 +330,47 @@ serve(async (req) => {
             })();
 
             return new Response(readable, {
-                headers: {
-                    ...corsHeaders,
-                    "Content-Type": "text/event-stream",
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive"
-                }
+                headers: { ...corsHeaders, "Content-Type": "text/event-stream" }
             });
         }
 
-        // Legacy Logic: Extract from Storage Paths
+        // Action: extract (Single Batch - All Files Together)
         if (action === "extract" && jsonBody) {
             const { storagePaths, originalFileNames } = jsonBody;
             if (!storagePaths) throw new Error("Missing storagePaths");
 
-            // Check & Deduct UPFRONT
             await checkAndDeductCredits();
 
-            // Download files from Storage sequentially to save memory
             const fileContents = [];
             let totalBytes = 0;
-            const MAX_TOTAL_BYTES = 70 * 1024 * 1024; // 70MB limit for safety in 150MB Deno env
+            const MAX_TOTAL_BYTES = 70 * 1024 * 1024; // 70MB
 
-            for (const path of storagePaths) {
+            for (let i = 0; i < storagePaths.length; i++) {
+                const path = storagePaths[i];
+                const originalName = originalFileNames?.[i] || path;
                 try {
                     const { data, error } = await supabase.storage.from("documents").download(path);
-                    if (error) {
-                        console.error(`Download error for ${path}:`, error.message);
-                        continue;
-                    }
+                    if (error) continue;
 
-                    // Check size before loading into ArrayBuffer
-                    if (totalBytes + data.size > MAX_TOTAL_BYTES) {
-                        console.warn(`[Warning] Skipping ${path} - total size limit reached (${MAX_TOTAL_BYTES} bytes)`);
-                        continue;
-                    }
+                    if (totalBytes + data.size > MAX_TOTAL_BYTES) continue;
                     totalBytes += data.size;
 
                     const buffer = await data.arrayBuffer();
-
                     if (data.type.startsWith("image/") || data.type === "application/pdf") {
                         const uint8 = new Uint8Array(buffer);
-                        // Efficient Base64 conversion for large files
                         let binary = "";
                         const chunk_size = 16384;
-                        for (let i = 0; i < uint8.length; i += chunk_size) {
-                            const chunk = uint8.subarray(i, i + chunk_size);
-                            binary += String.fromCharCode(...chunk);
+                        for (let k = 0; k < uint8.length; k += chunk_size) {
+                            binary += String.fromCharCode(...uint8.subarray(k, k + chunk_size));
                         }
-                        const base64 = btoa(binary);
                         fileContents.push({
                             type: "image_url",
-                            image_url: { url: `data:${data.type};base64,${base64}` }
+                            image_url: { url: `data:${data.type};base64,${btoa(binary)}` }
                         });
                     } else {
-                        const text = new TextDecoder().decode(buffer);
                         fileContents.push({
                             type: "text",
-                            text: `--- Content of ${path} ---\n${text}`
+                            text: `--- Content of ${originalName} ---\n${new TextDecoder().decode(buffer)}`
                         });
                     }
                 } catch (e) {
@@ -433,17 +378,10 @@ serve(async (req) => {
                 }
             }
 
-            if (fileContents.length < storagePaths.length) {
-                console.warn(`[Warning] Only ${fileContents.length}/${storagePaths.length} files were successfully processed.`);
-            }
+            const prompt = getBatchPrompt(originalFileNames || storagePaths) + "\nReturn ONLY valid JSON.";
+            const models = ["google/gemini-3-flash-preview", "qwen/qwen3.5-plus-02-15", "google/gemini-2.0-flash-001"];
 
-            const namesForPrompt = originalFileNames || storagePaths;
-            const prompt = getBatchPrompt(namesForPrompt) + "\n\nCRITICAL: You MUST extract ALL items from the product lists. If there are 30 items, return 30 items. DO NOT truncate. Return ONLY valid JSON.";
-
-            // Call OpenRouter with fallback. Gemini 3 Flash is primary for best cost/perf balance.
             let aiData;
-            const models = ["google/gemini-3-flash-preview", "qwen/qwen3.5-plus-02-15", "moonshotai/kimi-k2.5"];
-
             for (const model of models) {
                 try {
                     console.log(`Trying model: ${model}`);
@@ -462,16 +400,16 @@ serve(async (req) => {
                         })
                     });
 
+                    if (!response.ok) continue;
                     aiData = await response.json();
-                    if (response.ok && aiData.choices?.[0]?.message?.content) break;
-                    console.warn(`Model ${model} failed, trying next...`);
+                    if (aiData.choices?.[0]?.message?.content) break;
                 } catch (e) {
                     console.error(`Error with model ${model}:`, e);
                 }
             }
 
             if (!aiData?.choices?.[0]?.message?.content) {
-                throw new Error(`AI error: All models failed or returned invalid response.`);
+                throw new Error(`AI error: All models failed.`);
             }
 
             let content = aiData.choices[0].message.content.trim();
@@ -479,36 +417,22 @@ serve(async (req) => {
                 content = content.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
             }
 
-            let result;
-            try {
-                result = safeParseJSON(content);
-            } catch (e: any) {
-                console.error("JSON Parse failure. Content snippet:", content.substring(0, 200));
-                throw new Error(`AI returned malformed data: ${e.message}`);
-            }
+            const rawParsed = safeParseJSON(content);
+            const result = mergeAgentResults(Array.isArray(rawParsed) ? rawParsed : [rawParsed]);
 
-            // Update Logs (Credits already deducted upfront)
             await supabase.from("logs").insert({
                 user_iin: iin,
-                action_type: "AI_EXTRACT_LEGACY",
+                action_type: "AI_EXTRACT_SINGLE_BATCH",
                 description: `Processed ${storagePaths.length} files`
             });
 
             return new Response(JSON.stringify(result), { headers: corsHeaders });
         }
 
-        throw new Error("Action not supported or missing streaming headers");
+        throw new Error("Action not supported");
 
     } catch (err: any) {
-        const errorMsg = err.message || "Unknown error";
-        console.error("Internal Edge Function Error:", errorMsg);
-        console.error("Stack:", err.stack);
-
-        return new Response(JSON.stringify({
-            error: errorMsg,
-            details: "Check Supabase Edge Function logs for more details.",
-            stack: err.stack
-        }), {
+        return new Response(JSON.stringify({ error: err.message }), {
             status: 500,
             headers: corsHeaders
         });

@@ -1,5 +1,4 @@
-const OPENROUTER_API_KEY = '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';
-const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
+// OpenRouter key removed for security. AI processing is now handled via Supabase Edge Functions.
 
 // Стратегия:
 const MODEL_VISION = "google/gemini-3-flash-preview"; // Основная модель

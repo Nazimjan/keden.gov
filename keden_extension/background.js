@@ -266,24 +266,20 @@ async function handleExtraction(documents, iin, targetTabId) {
             throw new Error(`Ошибка ИИ: ${moreInfo || funcError.message}`);
         }
 
-        // Нормализуем структуру: Edge Function возвращает flat-объект,
-        // а renderPreview ожидает { counteragents: { consignor, consignee, carrier, declarant }, vehicles, driver, products }
-        const aiDocuments = resultData.documents || [];
-        const mergedData = {
-            counteragents: {
-                consignor: resultData.consignor || null,
-                consignee: resultData.consignee || null,
-                carrier: resultData.carrier || null,
-                declarant: resultData.declarant || null,
-                filler: resultData.filler || null
-            },
-            vehicles: resultData.vehicles || { tractorRegNumber: '', tractorCountry: '', trailerRegNumber: '', trailerCountry: '' },
-            countries: resultData.countries || { departureCountry: '', destinationCountry: '' },
-            products: resultData.products || [],
-            registry: resultData.registry || { number: '', date: '' },
-            driver: resultData.driver || { present: false, iin: '', firstName: '', lastName: '' },
-            shipping: resultData.shipping || { customsCode: '', destCustomsCode: '', transportMode: '' }
+        // Server-side merging logic (merger.ts) already returned a complete structured object:
+        // { documents, validation, mergedData }
+        const mergedData = resultData.mergedData || {
+            counteragents: { consignor: null, consignee: null, carrier: null, declarant: null, filler: null },
+            vehicles: { tractorRegNumber: '', tractorCountry: '', trailerRegNumber: '', trailerCountry: '' },
+            countries: { departureCountry: '', destinationCountry: '' },
+            products: [],
+            registry: { number: '', date: '' },
+            driver: { present: false, iin: '', firstName: '', lastName: '' },
+            shipping: { customsCode: '', destCustomsCode: '', transportMode: '' }
         };
+
+        const validation = resultData.validation || { errors: [], warnings: [] };
+        const aiDocuments = resultData.documents || [];
 
         const finalResult = {
             documents: documents.map((d, idx) => {
@@ -304,7 +300,7 @@ async function handleExtraction(documents, iin, targetTabId) {
                     date: aiDoc?.date || ''
                 };
             }),
-            validation: { errors: [], warnings: [] },
+            validation,
             mergedData,
             rawFiles: documents.map(doc => {
                 const part = doc.parts[0];

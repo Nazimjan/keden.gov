@@ -20,6 +20,92 @@ function setStatus(msg) {
     }
 }
 
+function getConfidenceHTML(score) {
+    if (score === undefined) return '';
+    let cls = 'conf-high';
+    let text = 'Высокая';
+    let icon = '✅';
+
+    if (score < 0.6) {
+        cls = 'conf-low';
+        text = 'Низкая (Проверьте!)';
+        icon = '⚠️';
+    } else if (score < 0.85) {
+        cls = 'conf-medium';
+        text = 'Средняя';
+        icon = '❓';
+    }
+
+    return `<span class="conf-badge ${cls}">${icon} ${text} ${Math.round(score * 100)}%</span>`;
+}
+
+function updateStepper(stepNumber) {
+    const steps = document.querySelectorAll('.step');
+    steps.forEach(step => {
+        const s = parseInt(step.dataset.step);
+        step.classList.remove('active', 'completed');
+
+        if (s < stepNumber) {
+            step.classList.add('completed');
+        } else if (s === stepNumber) {
+            step.classList.add('active');
+        }
+    });
+}
+
+function initInlineValidation() {
+    const inputs = document.querySelectorAll('.preview-input');
+    inputs.forEach(input => {
+        const type = input.dataset.validate;
+        if (!type) return;
+
+        const validate = () => {
+            let isValid = true;
+            let msg = '';
+            const val = input.value.trim();
+
+            if (type === 'bin') {
+                isValid = /^\d{12}$/.test(val);
+                msg = 'Должно быть 12 цифр';
+            } else if (type === 'tnved') {
+                isValid = /^\d{6}$/.test(val);
+                msg = 'Должно быть 6 цифр';
+            } else if (type === 'positive') {
+                isValid = parseFloat(val) > 0;
+                msg = 'Должно быть > 0';
+            } else if (type === 'date') {
+                const isoDate = /^\d{4}-\d{2}-\d{2}$/.test(val);
+                const localDate = /^\d{2}\.\d{2}\.\d{4}$/.test(val);
+                isValid = (isoDate || localDate);
+                if (isValid) {
+                    const parts = localDate ? val.split('.').reverse() : val.split('-');
+                    isValid = !isNaN(Date.parse(parts.join('-')));
+                }
+                msg = 'Формат ГГГГ-ММ-ДД или ДД.ММ.ГГГГ';
+            } else if (type === 'required') {
+                isValid = val.length > 0;
+                msg = 'Обязательное поле';
+            }
+
+            if (!isValid && val.length > 0) {
+                input.classList.add('input-error');
+                let hint = input.nextElementSibling;
+                if (!hint || !hint.classList.contains('validation-hint')) {
+                    hint = document.createElement('div');
+                    hint.className = 'validation-hint';
+                    input.parentNode.insertBefore(hint, input.nextSibling);
+                }
+                hint.innerText = msg;
+            } else {
+                input.classList.remove('input-error');
+            }
+        };
+
+        input.addEventListener('input', validate);
+        validate(); // Initial check
+    });
+}
+
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
     if (!container) return;
@@ -94,6 +180,21 @@ function showLoading(show, message, forcedStartTime = null) {
         const isFilling = message && message.includes('Заполнение');
 
         if (previewContent && !existingTimer && !isFilling) {
+            // Expand container and show preview panel to ensure timer is visible
+            const container = document.getElementById('mainContainer');
+            const previewArea = document.getElementById('previewArea');
+            if (container) {
+                container.classList.add('expanded');
+                // Adjust width for popup vs tab
+                if (window.innerWidth <= 860) {
+                    document.body.style.width = '800px';
+                } else {
+                    document.body.style.width = '100vw';
+                }
+            }
+            if (previewArea) previewArea.style.display = 'block';
+
+            updateStepper(2); // Step 2: Analysis
             previewContent.innerHTML = `
                 <div id="centralStatusOverlay" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 320px; text-align: center; animation: fadeIn 0.4s ease-out;">
                     <div class="loader central-spinner" style="display: block; margin-bottom: 28px; width: 48px; height: 48px; border-width: 4px; border-top-color: #007AFF;"></div>
@@ -107,6 +208,7 @@ function showLoading(show, message, forcedStartTime = null) {
                 </div>
             `;
         } else if (existingTimer || isFilling) {
+            if (isFilling) updateStepper(4); // Step 4: Done/Filling
             // Update the status on existing loader or show a non-destructive status
             const statusEl = document.getElementById('loaderStatus');
             if (statusEl) {
@@ -179,7 +281,18 @@ function handleFiles(newFiles) {
 function showError(msg) {
     const previewContent = document.getElementById('previewContent');
     const container = document.getElementById('mainContainer');
-    if (previewContent && container && container.classList.contains('expanded')) {
+    const previewArea = document.getElementById('previewArea');
+
+    if (previewContent && container) {
+        // Ensure container is expanded and preview area is visible to show error
+        container.classList.add('expanded');
+        if (window.innerWidth <= 860) {
+            document.body.style.width = '800px';
+        } else {
+            document.body.style.width = '100vw';
+        }
+        if (previewArea) previewArea.style.display = 'block';
+
         previewContent.innerHTML = `
             <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #ef4444; text-align: center; padding: 20px;">
                 <div style="font-size: 40px; margin-bottom: 16px;">⚠️</div>
@@ -302,6 +415,36 @@ if (dropZone && fileInput) {
         e.target.value = '';
     };
 }
+
+function initSmartDragAndDrop() {
+    const overlay = document.getElementById('smart-drop-overlay');
+    if (!overlay) return;
+
+    window.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        overlay.classList.add('visible');
+    });
+
+    overlay.addEventListener('dragleave', (e) => {
+        // Only hide if we actually leave the overlay area (not just child elements)
+        if (e.relatedTarget === null || !overlay.contains(e.relatedTarget)) {
+            overlay.classList.remove('visible');
+        }
+    });
+
+    overlay.addEventListener('drop', (e) => {
+        e.preventDefault();
+        overlay.classList.remove('visible');
+
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            handleFiles(Array.from(files));
+        }
+    });
+}
+
+// Initialize Smart Drag & Drop immediately
+initSmartDragAndDrop();
 
 let kedenDirectorySettings = {};
 
@@ -484,6 +627,7 @@ function renderPreview(aiResponse) {
     const previewContent = document.getElementById('previewContent');
     const container = document.getElementById('mainContainer');
 
+    updateStepper(3); // Step 3: Verification
     previewContent.innerHTML = '';
     if (container) {
         container.classList.add('expanded');
@@ -499,6 +643,8 @@ function renderPreview(aiResponse) {
     const fillBtn = document.getElementById('confirmFillBtn');
     if (fillBtn) fillBtn.style.display = 'block';
 
+    const conf = data.confidence || {};
+
     // 0. Render Validation Summary
     renderValidationSummary(validation);
 
@@ -508,7 +654,10 @@ function renderPreview(aiResponse) {
     docSection.style.animation = 'fadeIn 0.3s ease-out forwards';
     docSection.innerHTML = `
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
-            <h3 style="margin: 0;">📑 Документы (44 графа)</h3>
+            <div style="display: flex; align-items: center; gap: 12px;">
+                <h3 style="margin: 0;">📑 Документы (44 графа)</h3>
+                ${getConfidenceHTML(conf.documents)}
+            </div>
             <button id="addDocBtn" class="icon-btn" style="background: var(--accent); color: white; border-radius: 8px; width: 32px; height: 32px;">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
                     <line x1="12" y1="5" x2="12" y2="19"></line>
@@ -586,7 +735,7 @@ function renderPreview(aiResponse) {
             </div>
             <select class="preview-input doc-type-select" style="padding: 6px 10px;">${optionsHtml}</select>
             <input type="text" class="preview-input doc-num-input" value="${doc.number || ''}" placeholder="б/н" style="padding: 6px 10px;">
-            <input type="text" class="preview-input doc-date-input" value="${doc.date || ''}" placeholder="ДД.ММ.ГГГГ" style="padding: 6px 10px;">
+            <input type="text" class="preview-input doc-date-input" value="${doc.date || ''}" data-validate="date" placeholder="ДД.ММ.ГГГГ" style="padding: 6px 10px;">
             <button class="delete-doc-btn">×</button>
         `;
 
@@ -691,26 +840,30 @@ function renderPreview(aiResponse) {
         section.className = 'preview-section';
         section.style.animation = 'fadeIn 0.3s ease-out 0.1s forwards';
         section.style.opacity = '0';
+        const vWarning = (conf.vehicles < 0.6) ? 'input-warning' : '';
         section.innerHTML = `
-                <h3>Транспорт и Маршрут</h3>
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                    <h3 style="margin: 0;">Транспорт и Маршрут</h3>
+                    ${getConfidenceHTML(conf.vehicles)}
+                </div>
                 <div class="preview-row" style="grid-template-columns: 1fr 120px;">
                     <div>
                         <label class="preview-label">Тягач (Номер)</label>
-                        <input type="text" class="preview-input" id="prev-tractor-num" value="${v.tractorRegNumber || ''}">
+                        <input type="text" class="preview-input ${vWarning}" id="prev-tractor-num" value="${v.tractorRegNumber || ''}">
                     </div>
                     <div>
                         <label class="preview-label">Страна ТС</label>
-                        <input type="text" class="preview-input" id="prev-tractor-country" value="${v.tractorCountry || ''}">
+                        <input type="text" class="preview-input ${vWarning}" id="prev-tractor-country" value="${v.tractorCountry || ''}">
                     </div>
                 </div>
                 <div class="preview-row" style="grid-template-columns: 1fr 120px; margin-bottom: 24px;">
                     <div>
                         <label class="preview-label">Прицеп (Номер)</label>
-                        <input type="text" class="preview-input" id="prev-trailer-num" value="${v.trailerRegNumber || ''}">
+                        <input type="text" class="preview-input ${vWarning}" id="prev-trailer-num" value="${v.trailerRegNumber || ''}">
                     </div>
                     <div>
                         <label class="preview-label">Страна ТС</label>
-                        <input type="text" class="preview-input" id="prev-trailer-country" value="${v.trailerCountry || ''}">
+                        <input type="text" class="preview-input ${vWarning}" id="prev-trailer-country" value="${v.trailerCountry || ''}">
                     </div>
                 </div>
                 
@@ -765,7 +918,15 @@ function renderPreview(aiResponse) {
         section.className = 'preview-section';
         section.style.animation = 'fadeIn 0.3s ease-out 0.2s forwards';
         section.style.opacity = '0';
-        section.innerHTML = `<h3>Контрагенты</h3>`;
+        section.innerHTML = `
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                <h3 style="margin: 0;">Контрагенты</h3>
+                <div style="display: flex; gap: 8px;">
+                    ${getConfidenceHTML(conf.consignor)}
+                    ${getConfidenceHTML(conf.consignee)}
+                </div>
+            </div>
+        `;
 
         const agents = [
             { id: 'consignor', label: 'Отправитель (Имя)', data: ca.consignor },
@@ -787,18 +948,19 @@ function renderPreview(aiResponse) {
                 if (!address) address = addrObj.district || '';
                 const div = document.createElement('div');
                 div.style.marginBottom = '16px';
+                const warningClass = (conf[agent.id] < 0.6) ? 'input-warning' : '';
                 div.innerHTML = `
                     <label class="preview-label">${agent.label}</label>
                     <div style="display: flex; flex-direction: column; gap: 8px;">
                         <div style="display: flex; gap: 10px; align-items: center;">
-                            <input type="text" class="preview-input" id="prev-agent-bin-${agent.id}" 
-                                value="${bin}" 
+                            <input type="text" class="preview-input ${warningClass}" id="prev-agent-bin-${agent.id}" 
+                                value="${bin}" data-validate="bin"
                                 placeholder="БИН/ИИН" style="flex: 0 0 140px;">
-                            <input type="text" class="preview-input" id="prev-agent-name-${agent.id}" 
+                            <input type="text" class="preview-input ${warningClass}" id="prev-agent-name-${agent.id}" 
                                 value="${name}" 
                                 placeholder="Наименование" style="flex: 1;">
                         </div>
-                        <input type="text" class="preview-input" id="prev-agent-address-${agent.id}" 
+                        <input type="text" class="preview-input ${warningClass}" id="prev-agent-address-${agent.id}" 
                             value="${address}" 
                             placeholder="Адрес (из СМР/Инвойса)" style="font-size: 12px; color: #cbd5e1;">
                     </div>
@@ -812,7 +974,7 @@ function renderPreview(aiResponse) {
                             <label style="font-size: 9px; color: #64748b; display: block;">Свидетельство представителя</label>
                             <div style="display: flex; gap: 4px;">
                                 <input type="text" class="preview-input" id="prev-agent-cert-num" value="${cert.docNumber || ''}" placeholder="№ Свидетельства" style="flex: 2;">
-                                <input type="text" class="preview-input" id="prev-agent-cert-date" value="${cert.docDate || ''}" placeholder="Дата" style="flex: 1;">
+                                <input type="text" class="preview-input" id="prev-agent-cert-date" value="${cert.docDate || ''}" data-validate="date" placeholder="Дата" style="flex: 1;">
                             </div>
                         </div>
                     `;
@@ -833,22 +995,26 @@ function renderPreview(aiResponse) {
         section.className = 'preview-section';
         section.style.animation = 'fadeIn 0.3s ease-out 0.25s forwards';
         section.style.opacity = '0';
+        const dWarning = ((conf.driver || 1.0) < 0.6) ? 'input-warning' : '';
         section.innerHTML = `
-            <h3>Водитель</h3>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                <h3 style="margin: 0;">Водитель</h3>
+                ${getConfidenceHTML(conf.driver || 1.0)}
+            </div>
             <div class="row" style="margin-bottom: 4px;">
                 <div style="flex: 1;">
                     <label style="font-size: 10px; color: #64748b;">ИИН Водителя</label>
-                    <input type="text" class="preview-input" id="prev-driver-iin" value="${data.driver.iin || ''}" placeholder="ИИН">
+                    <input type="text" class="preview-input ${dWarning}" id="prev-driver-iin" value="${data.driver.iin || ''}" data-validate="bin" placeholder="ИИН">
                 </div>
             </div>
             <div class="row" style="gap: 4px;">
                 <div style="flex: 1;">
                     <label style="font-size: 10px; color: #64748b;">Фамилия</label>
-                    <input type="text" class="preview-input" id="prev-driver-lastName" value="${data.driver.lastName || ''}" placeholder="Фамилия">
+                    <input type="text" class="preview-input ${dWarning}" id="prev-driver-lastName" value="${data.driver.lastName || ''}" placeholder="Фамилия">
                 </div>
                 <div style="flex: 1;">
                     <label style="font-size: 10px; color: #64748b;">Имя</label>
-                    <input type="text" class="preview-input" id="prev-driver-firstName" value="${data.driver.firstName || ''}" placeholder="Имя">
+                    <input type="text" class="preview-input ${dWarning}" id="prev-driver-firstName" value="${data.driver.firstName || ''}" placeholder="Имя">
                 </div>
             </div>
         `;
@@ -862,7 +1028,10 @@ function renderPreview(aiResponse) {
         section.style.animation = 'fadeIn 0.3s ease-out 0.3s forwards';
         section.style.opacity = '0';
         section.innerHTML = `
-            <h3>Товары</h3>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
+                <h3 style="margin: 0;">Товары</h3>
+                ${getConfidenceHTML(conf.products)}
+            </div>
             <table class="preview-table" style="table-layout: fixed;">
                 <thead>
                     <tr>
@@ -886,11 +1055,11 @@ function renderPreview(aiResponse) {
             const nameStyle = hasCyrillic ? '' : 'border-color: #ef4444; background: rgba(239, 68, 68, 0.05);';
 
             tr.innerHTML = `
-                <td style="padding: 6px 4px;"><input type="text" class="preview-input prev-prod-tnved" value="${p.tnvedCode || ''}" data-index="${i}" style="padding: 6px 8px;"></td>
+                <td style="padding: 6px 4px;"><input type="text" class="preview-input prev-prod-tnved" value="${p.tnvedCode || ''}" data-index="${i}" data-validate="tnved" style="padding: 6px 8px;"></td>
                 <td style="padding: 6px 4px;"><input type="text" class="preview-input prev-prod-name" value="${p.commercialName || ''}" data-index="${i}" style="${nameStyle} padding: 6px 8px;"></td>
-                <td style="padding: 6px 4px;"><input type="number" class="preview-input prev-prod-weight" value="${p.grossWeight || ''}" data-index="${i}" style="text-align: center; padding: 6px 8px;"></td>
-                <td style="padding: 6px 4px;"><input type="number" class="preview-input prev-prod-qty" value="${p.quantity || ''}" data-index="${i}" style="text-align: center; padding: 6px 8px;"></td>
-                <td style="padding: 6px 4px;"><input type="number" class="preview-input prev-prod-cost" value="${p.cost || ''}" data-index="${i}" style="text-align: center; padding: 6px 8px;"></td>
+                <td style="padding: 6px 4px;"><input type="number" class="preview-input prev-prod-weight" value="${p.grossWeight || ''}" data-index="${i}" data-validate="positive" style="text-align: center; padding: 6px 8px;"></td>
+                <td style="padding: 6px 4px;"><input type="number" class="preview-input prev-prod-qty" value="${p.quantity || ''}" data-index="${i}" data-validate="positive" style="text-align: center; padding: 6px 8px;"></td>
+                <td style="padding: 6px 4px;"><input type="number" class="preview-input prev-prod-cost" value="${p.cost || ''}" data-index="${i}" data-validate="positive" style="text-align: center; padding: 6px 8px;"></td>
                 <td style="padding: 6px 4px;"><input type="text" class="preview-input prev-prod-curr" value="${p.currencyCode || 'USD'}" data-index="${i}" style="text-align: center; padding: 6px 8px;"></td>
             `;
             tbody.appendChild(tr);
@@ -958,6 +1127,8 @@ function renderPreview(aiResponse) {
             });
         }
     });
+
+    initInlineValidation();
 }
 
 function renderValidationSummary(validation) {
@@ -1001,13 +1172,19 @@ function renderValidationSummary(validation) {
 
     validation.warnings.forEach(warn => {
         const div = document.createElement('div');
-        div.style.background = 'rgba(245, 158, 11, 0.08)';
-        div.style.border = '1px solid rgba(245, 158, 11, 0.2)';
+        const isSuccess = warn.severity === 'SUCCESS';
+
+        div.style.background = isSuccess ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)';
+        div.style.border = isSuccess ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid rgba(245, 158, 11, 0.2)';
         div.style.borderRadius = '12px';
         div.style.padding = '12px 16px';
-        div.style.color = '#fbbf24';
+        div.style.color = isSuccess ? '#34d399' : '#fbbf24';
         div.style.fontSize = '13px';
-        div.innerHTML = `<span style="margin-right:8px;">⚠️</span> <strong>Внимание:</strong> ${warn.message}`;
+
+        const icon = isSuccess ? '' : '<span style="margin-right:8px;">⚠️</span> ';
+        const label = isSuccess ? '' : '<strong>Внимание:</strong> ';
+
+        div.innerHTML = `${icon}${label}${warn.message}`;
         list.appendChild(div);
     });
 
@@ -1271,6 +1448,7 @@ function resetApp() {
     if (window.innerWidth <= 860) {
         document.body.style.width = '380px';
     }
+    updateStepper(1); // Reset Stepper to Step 1
 }
 
 // Visual feedback for online status

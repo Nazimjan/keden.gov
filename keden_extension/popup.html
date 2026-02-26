@@ -18,6 +18,11 @@
             --radius-xl: 24px;
             --radius-l: 14px;
             --shadow-premium: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+
+            /* Stepper Colors */
+            --step-pending: rgba(255, 255, 255, 0.1);
+            --step-active: #007AFF;
+            --step-done: #34C759;
         }
 
         body {
@@ -766,6 +771,192 @@
                 overflow-y: auto;
             }
         }
+
+        /* Confidence Styles */
+        .conf-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .conf-high {
+            background: rgba(52, 199, 89, 0.1);
+            color: #34C759;
+        }
+
+        .conf-medium {
+            background: rgba(255, 159, 10, 0.1);
+            color: #FF9F0A;
+        }
+
+        .conf-low {
+            background: rgba(255, 59, 48, 0.1);
+            color: #FF3B30;
+            animation: pulse-soft 2s infinite;
+        }
+
+        .input-warning {
+            border-color: rgba(255, 159, 10, 0.5) !important;
+            background: rgba(255, 159, 10, 0.05) !important;
+        }
+
+        @keyframes pulse-soft {
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.7;
+            }
+
+            100% {
+                opacity: 1;
+            }
+        }
+
+        .input-error {
+            border-color: rgba(255, 59, 48, 0.6) !important;
+            background: rgba(255, 59, 48, 0.05) !important;
+            box-shadow: 0 0 0 2px rgba(255, 59, 48, 0.1) !important;
+        }
+
+        .validation-hint {
+            font-size: 9px;
+            margin-top: 2px;
+            font-weight: 500;
+            display: none;
+        }
+
+        .input-error+.validation-hint {
+            display: block;
+            color: #FF3B30;
+        }
+
+        /* Stepper Styles */
+        .stepper {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 32px;
+            position: relative;
+            padding: 0 4px;
+        }
+
+        .stepper::before {
+            content: '';
+            position: absolute;
+            top: 14px;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: var(--step-pending);
+            z-index: 0;
+        }
+
+        .step {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 8px;
+            width: 60px;
+        }
+
+        .step-circle {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background: var(--bg);
+            border: 2px solid var(--step-pending);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--text-secondary);
+            transition: all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .step.active .step-circle {
+            border-color: var(--step-active);
+            color: #fff;
+            box-shadow: 0 0 15px rgba(0, 122, 255, 0.4);
+            transform: scale(1.1);
+        }
+
+        .step.completed .step-circle {
+            border-color: var(--step-done);
+            background: var(--step-done);
+            color: #fff;
+        }
+
+        .step-label {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            text-align: center;
+            white-space: nowrap;
+        }
+
+        .step.active .step-label {
+            color: #fff;
+        }
+
+        /* Smart Drop Overlay */
+        #smart-drop-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(9, 9, 11, 0.85);
+            backdrop-filter: blur(10px);
+            z-index: 10000;
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            border: 4px dashed var(--step-active);
+            margin: -4px;
+            /* compensate border */
+            pointer-events: none;
+            /* Let events pass until we show it */
+            transition: all 0.3s ease;
+        }
+
+        #smart-drop-overlay.visible {
+            display: flex;
+            pointer-events: auto;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        .drop-icon-anim {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 24px;
+            color: var(--step-active);
+            animation: bounce 2s infinite;
+        }
+
+        @keyframes bounce {
+
+            0%,
+            100% {
+                transform: translateY(0);
+            }
+
+            50% {
+                transform: translateY(-20px);
+            }
+        }
     </style>
 </head>
 
@@ -798,6 +989,25 @@
                 <!-- User Auth Status Info -->
                 <div id="authStatus"
                     style="display: none; background: rgba(255,255,255,0.03); border: 1px solid var(--glass-border); border-radius: 16px; padding: 16px; margin-bottom: 24px;">
+                </div>
+
+                <div class="stepper" id="mainStepper">
+                    <div class="step active" data-step="1">
+                        <div class="step-circle">1</div>
+                        <div class="step-label">Загрузка</div>
+                    </div>
+                    <div class="step" data-step="2">
+                        <div class="step-circle">2</div>
+                        <div class="step-label">Анализ</div>
+                    </div>
+                    <div class="step" data-step="3">
+                        <div class="step-circle">3</div>
+                        <div class="step-label">Проверка</div>
+                    </div>
+                    <div class="step" data-step="4">
+                        <div class="step-circle">4</div>
+                        <div class="step-label">Готово</div>
+                    </div>
                 </div>
 
                 <div class="tabs">
@@ -950,6 +1160,18 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Smart Drop Overlay -->
+    <div id="smart-drop-overlay">
+        <svg class="drop-icon-anim" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+        </svg>
+        <h2 style="font-size: 24px; font-weight: 700; margin-bottom: 8px;">Отпустите файлы</h2>
+        <p style="color: var(--text-secondary);">ИИ мгновенно приступит к анализу</p>
     </div>
 
     <!-- Scripts -->
