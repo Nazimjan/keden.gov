@@ -50,6 +50,10 @@ async function getKedenUserInfo() {
                             sessionStorage.getItem('access_token');
                     }
 
+                    if (token) {
+                        token = token.replace(/^"|"$/g, '');
+                    }
+
                     if (token && token.includes('.')) {
                         try {
                             const parts = token.split('.');

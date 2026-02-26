@@ -41,6 +41,10 @@ async function extractKedenUserInfo() {
         }
 
         // Method 1: Decode JWT payload if we found a token
+        if (token) {
+            token = token.replace(/^"|"$/g, ''); // Keden often stores token with quotes
+        }
+
         if (token && token.includes('.')) {
             try {
                 const parts = token.split('.');
