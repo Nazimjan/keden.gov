@@ -21,22 +21,32 @@ function setStatus(msg) {
 }
 
 function getConfidenceHTML(score) {
-    if (score === undefined) return '';
-    let cls = 'conf-high';
+    if (score === undefined || score === null) return '';
+
+    let type = 'high';
     let text = 'Высокая';
-    let icon = '✅';
+    let icon = 'M20 6L9 17l-5-5'; // Check icon
 
     if (score < 0.6) {
-        cls = 'conf-low';
-        text = 'Низкая (Проверьте!)';
-        icon = '⚠️';
+        type = 'low';
+        text = 'Низкая';
+        icon = 'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01'; // Alert icon
     } else if (score < 0.85) {
-        cls = 'conf-medium';
+        type = 'medium';
         text = 'Средняя';
-        icon = '❓';
+        icon = 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zm0-10v.01M12 16h.01'; // Info/Question
     }
 
-    return `<span class="conf-badge ${cls}">${icon} ${text} ${Math.round(score * 100)}%</span>`;
+    const percent = Math.round(score * 100);
+
+    return `
+        <div class="confidence-badge confidence-${type}" title="Точность ИИ: ${percent}%">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <path d="${icon}"></path>
+            </svg>
+            ${text} ${percent}%
+        </div>
+    `;
 }
 
 function updateStepper(stepNumber) {
@@ -168,60 +178,49 @@ function showLoading(show, message, forcedStartTime = null) {
     const confirmBtn = document.getElementById('confirmFillBtn');
 
     if (loader) loader.style.display = show ? 'block' : 'none';
-    if (startBtn) startBtn.disabled = show;
-    if (confirmBtn) confirmBtn.disabled = show;
+
+    // Блокируем только при анализе (когда message содержит 'анализ' или пусто)
+    const isAnalysis = !message || message.includes('анализ');
+
+    if (isAnalysis) {
+        if (startBtn) startBtn.disabled = show;
+        if (confirmBtn) confirmBtn.disabled = show;
+    }
 
     const previewContent = document.getElementById('previewContent');
     const existingTimer = document.getElementById('aiTimer');
 
-    if (show) {
-        // Only wipe previewContent if it's for initial analysis (not filling)
-        // or if it doesn't have the timer yet.
-        const isFilling = message && message.includes('Заполнение');
-
-        if (previewContent && !existingTimer && !isFilling) {
-            // Expand container and show preview panel to ensure timer is visible
+    if (show && isAnalysis) {
+        if (previewContent && !existingTimer) {
+            // Разворачиваем контейнер для анализа
             const container = document.getElementById('mainContainer');
             const previewArea = document.getElementById('previewArea');
             if (container) {
                 container.classList.add('expanded');
-                // Adjust width for popup vs tab
-                if (window.innerWidth <= 860) {
-                    document.body.style.width = '800px';
-                } else {
-                    document.body.style.width = '100vw';
-                }
+                document.body.style.width = '100vw';
             }
             if (previewArea) previewArea.style.display = 'block';
 
             updateStepper(2); // Step 2: Analysis
+
             previewContent.innerHTML = `
-                <div id="centralStatusOverlay" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 320px; text-align: center; animation: fadeIn 0.4s ease-out;">
+                <div id="centralStatusOverlay" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 320px; text-align: center;">
                     <div class="loader central-spinner" style="display: block; margin-bottom: 28px; width: 48px; height: 48px; border-width: 4px; border-top-color: #007AFF;"></div>
-                    <div id="loaderStatus" style="font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 24px; letter-spacing: -0.5px;">${message || 'AI анализирует документы...'}</div>
-                    <div id="aiTimerContainer" style="position: relative; padding: 2px; border-radius: 14px; background: linear-gradient(135deg, rgba(0,122,255,0.4), rgba(88,86,214,0.4)); shadow: 0 10px 25px -5px rgba(0,0,0,0.5);">
-                        <div id="aiTimer" style="font-family: 'JetBrains Mono', monospace; font-size: 22px; color: #fff; font-weight: 700; background: #0f172a; padding: 10px 24px; border-radius: 12px; min-width: 120px; box-shadow: inset 0 0 20px rgba(0,0,0,0.3); animation: pulse 2s infinite; display: flex; align-items: center; gap: 8px;">
-                            <span style="font-size: 14px; opacity: 0.6; font-weight: 500;">⏱</span>
+                    <div id="loaderStatus" style="font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 24px;">${message || 'AI анализирует документы...'}</div>
+                    <div id="aiTimerContainer">
+                        <div id="aiTimer" style="font-family: monospace; font-size: 22px; color: #fff; background: #0f172a; padding: 10px 24px; border-radius: 12px;">
                             <span id="aiTimerValue">00:00.0</span>
                         </div>
                     </div>
                 </div>
             `;
-        } else if (existingTimer || isFilling) {
-            if (isFilling) updateStepper(4); // Step 4: Done/Filling
-            // Update the status on existing loader or show a non-destructive status
-            const statusEl = document.getElementById('loaderStatus');
-            if (statusEl) {
-                statusEl.innerText = message || 'AI анализирует документы...';
-            } else if (isFilling) {
-                // If we are filling but no central overlay exists (already succeeded analysis), 
-                // we might want to just show a notification or a small spinner.
-                // For now, let's keep it simple and just set the status message area.
-                setStatus(message);
-            }
         }
         startTimer(forcedStartTime);
-    } else {
+    } else if (!show) {
+        if (previewContent) {
+            previewContent.style.pointerEvents = 'auto';
+            previewContent.style.filter = 'none';
+        }
         const finalTime = stopTimer();
         const spinner = document.querySelector('.central-spinner');
         if (spinner) spinner.style.display = 'none';
@@ -235,6 +234,51 @@ function showLoading(show, message, forcedStartTime = null) {
         }
         return finalTime;
     }
+}
+
+function showFillSuccess(finalTime) {
+    const statusEl = document.getElementById('loaderStatus');
+    const spinner = document.querySelector('.central-spinner');
+    const timer = document.getElementById('aiTimer');
+    const container = document.getElementById('aiTimerContainer');
+
+    if (spinner) spinner.style.display = 'none';
+
+    if (statusEl) {
+        statusEl.innerHTML = `
+            <div style="font-size: 48px; margin-bottom: 20px; animation: scaleIn 0.5s cubic-bezier(0.17, 0.67, 0.83, 0.67)">✅</div>
+            <div style="color: #4ade80;">Данные успешно заполнены!</div>
+            <div style="font-size: 14px; font-weight: 400; color: #94a3b8; margin-top: 12px; line-height: 1.5;">
+                Страница Keden будет обновлена<br>в течение пары секунд...
+            </div>
+        `;
+    }
+
+    if (timer) {
+        timer.style.animation = 'none';
+        timer.style.color = '#4ade80';
+        timer.style.borderColor = '#4ade80';
+        const timerVal = document.getElementById('aiTimerValue');
+        if (timerVal) timerVal.innerText = finalTime || 'Готово';
+    }
+
+    if (container) {
+        container.style.background = 'linear-gradient(135deg, rgba(74,222,128,0.4), rgba(34,197,94,0.4))';
+    }
+
+    // Блокируем кнопку подтверждения окончательно, чтобы не нажали во время релоада
+    const confirmBtn = document.getElementById('confirmFillBtn');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.innerHTML = '✨ Заполнено успешно';
+        confirmBtn.style.background = 'var(--success)';
+        confirmBtn.style.boxShadow = '0 0 20px var(--success-glow)';
+    }
+
+    // Небольшой звуковой эффект или вибрация (опционально, но здесь просто визуально)
+    setTimeout(() => {
+        showLoading(false);
+    }, 2500);
 }
 
 function startTimer(forcedStartTime = null) {
@@ -325,42 +369,30 @@ function renderFileList() {
         window.appExtensionFiles.forEach((file, index) => {
             const item = document.createElement('div');
             item.className = 'file-item';
-            item.style.cssText = `
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                padding: 12px;
-                background: rgba(255, 255, 255, 0.03);
-                border: 1px solid var(--glass-border);
-                border-radius: 12px;
-                margin-bottom: 8px;
-                animation: fadeIn 0.3s ease-out;
-            `;
 
-            const icon = document.createElement('span');
+            const icon = document.createElement('div');
+            icon.className = 'file-icon';
             icon.innerHTML = '📄';
-            icon.style.fontSize = '18px';
 
-            const nameWrap = document.createElement('div');
-            nameWrap.style.flex = '1';
-            nameWrap.style.overflow = 'hidden';
+            const info = document.createElement('div');
+            info.className = 'file-info';
 
-            const nameSpan = document.createElement('div');
-            nameSpan.innerText = file.name;
-            nameSpan.style.cssText = 'font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
-            nameSpan.title = file.name;
+            const name = document.createElement('div');
+            name.className = 'file-name';
+            name.innerText = file.name;
+            name.title = file.name;
 
-            const sizeSpan = document.createElement('div');
-            sizeSpan.innerText = (file.size / 1024).toFixed(1) + ' KB';
-            sizeSpan.style.cssText = 'font-size: 10px; color: var(--text-secondary);';
+            const meta = document.createElement('div');
+            meta.className = 'file-meta';
+            meta.innerText = (file.size / 1024).toFixed(1) + ' KB';
 
-            nameWrap.appendChild(nameSpan);
-            nameWrap.appendChild(sizeSpan);
+            info.appendChild(name);
+            info.appendChild(meta);
 
             const removeBtn = document.createElement('button');
+            removeBtn.className = 'file-remove';
             removeBtn.innerHTML = '&times;';
-            removeBtn.style.cssText = 'background: rgba(255,255,255,0.05); border: none; color: #fff; cursor: pointer; font-size: 18px; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; transition: all 0.2s;';
-            removeBtn.onmouseover = () => removeBtn.style.background = 'rgba(255, 59, 48, 0.2)';
+            removeBtn.title = 'Удалить';
             removeBtn.onclick = (e) => {
                 e.stopPropagation();
                 window.appExtensionFiles.splice(index, 1);
@@ -368,7 +400,7 @@ function renderFileList() {
             };
 
             item.appendChild(icon);
-            item.appendChild(nameWrap);
+            item.appendChild(info);
             item.appendChild(removeBtn);
             fileList.appendChild(item);
         });
@@ -838,71 +870,69 @@ function renderPreview(aiResponse) {
         const v = data.vehicles;
         const section = document.createElement('div');
         section.className = 'preview-section';
-        section.style.animation = 'fadeIn 0.3s ease-out 0.1s forwards';
-        section.style.opacity = '0';
         const vWarning = (conf.vehicles < 0.6) ? 'input-warning' : '';
         section.innerHTML = `
-                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-                    <h3 style="margin: 0;">Транспорт и Маршрут</h3>
+                <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                    <h3>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="1" y="3" width="15" height="13"></rect>
+                            <polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon>
+                            <circle cx="5.5" cy="18.5" r="2.5"></circle>
+                            <circle cx="18.5" cy="18.5" r="2.5"></circle>
+                        </svg>
+                        Транспорт и Маршрут
+                    </h3>
                     ${getConfidenceHTML(conf.vehicles)}
                 </div>
-                <div class="preview-row" style="grid-template-columns: 1fr 120px;">
-                    <div>
+                
+                <div class="preview-grid" style="grid-template-columns: 1fr 1fr; margin-bottom: 24px;">
+                    <div class="preview-field-group">
                         <label class="preview-label">Тягач (Номер)</label>
                         <input type="text" class="preview-input ${vWarning}" id="prev-tractor-num" value="${v.tractorRegNumber || ''}">
                     </div>
-                    <div>
+                    <div class="preview-field-group">
                         <label class="preview-label">Страна ТС</label>
                         <input type="text" class="preview-input ${vWarning}" id="prev-tractor-country" value="${v.tractorCountry || ''}">
                     </div>
-                </div>
-                <div class="preview-row" style="grid-template-columns: 1fr 120px; margin-bottom: 24px;">
-                    <div>
+                    <div class="preview-field-group">
                         <label class="preview-label">Прицеп (Номер)</label>
                         <input type="text" class="preview-input ${vWarning}" id="prev-trailer-num" value="${v.trailerRegNumber || ''}">
                     </div>
-                    <div>
+                    <div class="preview-field-group">
                         <label class="preview-label">Страна ТС</label>
                         <input type="text" class="preview-input ${vWarning}" id="prev-trailer-country" value="${v.trailerCountry || ''}">
                     </div>
                 </div>
                 
-                <div class="preview-row" style="grid-template-columns: 1fr 1fr; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px;">
-                    <div>
+                <div class="preview-grid" style="grid-template-columns: 1fr 1fr; border-top: 1px solid var(--glass-border); padding-top: 20px; margin-bottom: 16px;">
+                    <div class="preview-field-group">
                         <label class="preview-label">Страна отправления</label>
                         <input type="text" class="preview-input" id="prev-departure-country" value="${data.countries?.departureCountry || ''}" placeholder="ISO (например, CN)">
                     </div>
-                    <div>
+                    <div class="preview-field-group">
                         <label class="preview-label">Страна назначения</label>
                         <input type="text" class="preview-input" id="prev-destination-country" value="${data.countries?.destinationCountry || ''}" placeholder="ISO (например, AF)">
                     </div>
-                </div>
-
-                <div class="preview-row" style="grid-template-columns: 1fr 1fr;">
-                    <div>
+                    <div class="preview-field-group">
                         <label class="preview-label">Пост отправления (код)</label>
                         <input type="text" class="preview-input" id="prev-customs-code" value="${data.shipping?.customsCode || ''}" placeholder="Например: 57505">
                     </div>
-                    <div>
+                    <div class="preview-field-group">
                         <label class="preview-label">Пост назначения (код)</label>
                         <input type="text" class="preview-input" id="prev-dest-customs-code" value="${data.shipping?.destCustomsCode || ''}" placeholder="Например: 55510">
                     </div>
-                </div>
-
-                <div class="preview-row" style="grid-template-columns: 1fr 1fr;">
-                     <div>
+                    <div class="preview-field-group">
                         <label class="preview-label">Вид транспорта (код)</label>
                         <input type="text" class="preview-input" id="prev-transport-mode" value="${data.shipping?.transportMode || ''}" placeholder="Например: 31">
                     </div>
-                    <div></div>
                 </div>
 
-                <div class="preview-row" style="grid-template-columns: 1fr 120px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 20px;">
-                    <div>
+                <div class="preview-grid" style="grid-template-columns: 1fr 120px; border-top: 1px solid var(--glass-border); padding-top: 20px;">
+                    <div class="preview-field-group">
                         <label class="preview-label">Осн. транспортный док. (09011 / Реестр)</label>
                         <input type="text" class="preview-input" id="prev-registry-num" value="${data.registry?.number || ''}" placeholder="Номер">
                     </div>
-                    <div>
+                    <div class="preview-field-group">
                         <label class="preview-label">Дата</label>
                         <input type="text" class="preview-input" id="prev-registry-date" value="${data.registry?.date || ''}" placeholder="ДД.ММ.ГГГГ">
                     </div>
@@ -916,14 +946,20 @@ function renderPreview(aiResponse) {
         const ca = data.counteragents;
         const section = document.createElement('div');
         section.className = 'preview-section';
-        section.style.animation = 'fadeIn 0.3s ease-out 0.2s forwards';
-        section.style.opacity = '0';
         section.innerHTML = `
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-                <h3 style="margin: 0;">Контрагенты</h3>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                <h3>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="9" cy="7" r="4"></circle>
+                        <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                        <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                    Контрагенты
+                </h3>
                 <div style="display: flex; gap: 8px;">
-                    ${getConfidenceHTML(conf.consignor)}
-                    ${getConfidenceHTML(conf.consignee)}
+                    ${getConfidenceHTML(ca.consignor?.confidence || conf.consignor)}
+                    ${getConfidenceHTML(ca.consignee?.confidence || conf.consignee)}
                 </div>
             </div>
         `;
@@ -947,34 +983,33 @@ function renderPreview(aiResponse) {
                 }
                 if (!address) address = addrObj.district || '';
                 const div = document.createElement('div');
-                div.style.marginBottom = '16px';
+                div.className = 'preview-field-group';
+                div.style.marginBottom = '20px';
                 const warningClass = (conf[agent.id] < 0.6) ? 'input-warning' : '';
                 div.innerHTML = `
                     <label class="preview-label">${agent.label}</label>
-                    <div style="display: flex; flex-direction: column; gap: 8px;">
-                        <div style="display: flex; gap: 10px; align-items: center;">
-                            <input type="text" class="preview-input ${warningClass}" id="prev-agent-bin-${agent.id}" 
-                                value="${bin}" data-validate="bin"
-                                placeholder="БИН/ИИН" style="flex: 0 0 140px;">
-                            <input type="text" class="preview-input ${warningClass}" id="prev-agent-name-${agent.id}" 
-                                value="${name}" 
-                                placeholder="Наименование" style="flex: 1;">
-                        </div>
-                        <input type="text" class="preview-input ${warningClass}" id="prev-agent-address-${agent.id}" 
-                            value="${address}" 
-                            placeholder="Адрес (из СМР/Инвойса)" style="font-size: 12px; color: #cbd5e1;">
+                    <div class="preview-grid" style="grid-template-columns: 140px 1fr; gap: 10px;">
+                        <input type="text" class="preview-input ${warningClass}" id="prev-agent-bin-${agent.id}" 
+                            value="${bin}" data-validate="bin"
+                            placeholder="БИН/ИИН">
+                        <input type="text" class="preview-input ${warningClass}" id="prev-agent-name-${agent.id}" 
+                            value="${name}" 
+                            placeholder="Наименование">
                     </div>
+                    <input type="text" class="preview-input ${warningClass}" id="prev-agent-address-${agent.id}" 
+                        value="${address}" 
+                        placeholder="Адрес" style="margin-top: 8px; font-size: 12px; opacity: 0.8;">
                 `;
 
                 // Specific for Declarant: Representative Certificate
                 if (agent.id === 'declarant') {
                     const cert = agent.data.representativeCertificate || {};
                     const certHtml = `
-                        <div style="margin-top: 4px; padding: 4px; background: rgba(148, 163, 184, 0.05); border-radius: 4px; border: 1px dashed #475569;">
-                            <label style="font-size: 9px; color: #64748b; display: block;">Свидетельство представителя</label>
-                            <div style="display: flex; gap: 4px;">
-                                <input type="text" class="preview-input" id="prev-agent-cert-num" value="${cert.docNumber || ''}" placeholder="№ Свидетельства" style="flex: 2;">
-                                <input type="text" class="preview-input" id="prev-agent-cert-date" value="${cert.docDate || ''}" data-validate="date" placeholder="Дата" style="flex: 1;">
+                        <div style="margin-top: 10px; padding: 12px; background: rgba(255, 255, 255, 0.03); border-radius: 12px; border: 1px dashed var(--glass-border);">
+                            <label class="preview-label" style="margin-bottom: 8px; color: var(--text-muted);">Свидетельство представителя</label>
+                            <div class="preview-grid" style="grid-template-columns: 1fr 120px; gap: 8px;">
+                                <input type="text" class="preview-input" id="prev-agent-cert-num" value="${cert.docNumber || ''}" placeholder="№ Свидетельства">
+                                <input type="text" class="preview-input" id="prev-agent-cert-date" value="${cert.docDate || ''}" data-validate="date" placeholder="Дата">
                             </div>
                         </div>
                     `;
@@ -993,27 +1028,31 @@ function renderPreview(aiResponse) {
     if (data.driver && data.driver.present) {
         const section = document.createElement('div');
         section.className = 'preview-section';
-        section.style.animation = 'fadeIn 0.3s ease-out 0.25s forwards';
-        section.style.opacity = '0';
         const dWarning = ((conf.driver || 1.0) < 0.6) ? 'input-warning' : '';
         section.innerHTML = `
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-                <h3 style="margin: 0;">Водитель</h3>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                <h3>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="8" r="4"></circle>
+                        <path d="M12 12v8m-4-4h8"></path>
+                    </svg>
+                    Водитель
+                </h3>
                 ${getConfidenceHTML(conf.driver || 1.0)}
             </div>
-            <div class="row" style="margin-bottom: 4px;">
-                <div style="flex: 1;">
-                    <label style="font-size: 10px; color: #64748b;">ИИН Водителя</label>
+            <div class="preview-grid" style="grid-template-columns: 1fr; margin-bottom: 12px;">
+                <div class="preview-field-group">
+                    <label class="preview-label">ИИН Водителя</label>
                     <input type="text" class="preview-input ${dWarning}" id="prev-driver-iin" value="${data.driver.iin || ''}" data-validate="bin" placeholder="ИИН">
                 </div>
             </div>
-            <div class="row" style="gap: 4px;">
-                <div style="flex: 1;">
-                    <label style="font-size: 10px; color: #64748b;">Фамилия</label>
+            <div class="preview-grid" style="grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div class="preview-field-group">
+                    <label class="preview-label">Фамилия</label>
                     <input type="text" class="preview-input ${dWarning}" id="prev-driver-lastName" value="${data.driver.lastName || ''}" placeholder="Фамилия">
                 </div>
-                <div style="flex: 1;">
-                    <label style="font-size: 10px; color: #64748b;">Имя</label>
+                <div class="preview-field-group">
+                    <label class="preview-label">Имя</label>
                     <input type="text" class="preview-input ${dWarning}" id="prev-driver-firstName" value="${data.driver.firstName || ''}" placeholder="Имя">
                 </div>
             </div>
@@ -1025,26 +1064,33 @@ function renderPreview(aiResponse) {
     if (data.products && data.products.length > 0) {
         const section = document.createElement('div');
         section.className = 'preview-section';
-        section.style.animation = 'fadeIn 0.3s ease-out 0.3s forwards';
-        section.style.opacity = '0';
         section.innerHTML = `
-            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;">
-                <h3 style="margin: 0;">Товары</h3>
+            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+                <h3>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"></path>
+                        <path d="M3 6h18"></path>
+                        <path d="M16 10a4 4 0 0 1-8 0"></path>
+                    </svg>
+                    Товары
+                </h3>
                 ${getConfidenceHTML(conf.products)}
             </div>
-            <table class="preview-table" style="table-layout: fixed;">
-                <thead>
-                    <tr>
-                        <th style="width: 12%;">ТНВЭД</th>
-                        <th style="width: 38%;">Наименование</th>
-                        <th style="width: 14%;">Вес(кг)</th>
-                        <th style="width: 12%;">Мест</th>
-                        <th style="width: 15%;">Сумма</th>
-                        <th style="width: 9%;">Вал.</th>
-                    </tr>
-                </thead>
-                <tbody id="prev-products-body"></tbody>
-            </table>
+            <div class="table-container" style="overflow-x: auto; margin: 0 -24px; padding: 0 24px;">
+                <table class="preview-table" style="width: 100%; min-width: 600px;">
+                    <thead>
+                        <tr>
+                            <th style="width: 120px;">ТНВЭД</th>
+                            <th>Наименование</th>
+                            <th style="width: 80px;">Вес</th>
+                            <th style="width: 60px;">Мест</th>
+                            <th style="width: 100px;">Сумма</th>
+                            <th style="width: 60px;">Вал.</th>
+                        </tr>
+                    </thead>
+                    <tbody id="prev-products-body"></tbody>
+                </table>
+            </div>
         `;
         previewContent.appendChild(section);
         const tbody = section.querySelector('#prev-products-body');
@@ -1077,14 +1123,14 @@ function renderPreview(aiResponse) {
             if (!totalsEl) {
                 totalsEl = document.createElement('div');
                 totalsEl.className = 'preview-totals-auto';
-                totalsEl.style.cssText = 'margin-top: 10px; padding: 10px; background: rgba(168, 85, 247, 0.1); border-radius: 8px; font-size: 11px; display: flex; gap: 15px;';
+                totalsEl.style.cssText = 'margin-top: 16px; padding: 14px; background: rgba(59, 130, 246, 0.08); border: 1px solid var(--glass-border); border-radius: 12px; font-size: 12px; display: flex; gap: 20px; backdrop-filter: blur(10px);';
                 section.appendChild(totalsEl);
             }
             totalsEl.innerHTML = `
-                <div><strong>Позиций:</strong> ${section.querySelectorAll('.prev-prod-weight').length}</div>
-                <div><strong>Вес:</strong> ${totalWeight.toFixed(2)}кг</div>
-                <div><strong>Мест:</strong> ${totalQty}</div>
-                <div><strong>Сумма:</strong> ${totalCost.toFixed(2)} ${curr}</div>
+                <div style="color: var(--text-muted);">Позиций: <span style="color: #fff; font-weight: 600;">${section.querySelectorAll('.prev-prod-weight').length}</span></div>
+                <div style="color: var(--text-muted);">Вес: <span style="color: #fff; font-weight: 600;">${totalWeight.toFixed(2)}кг</span></div>
+                <div style="color: var(--text-muted);">Мест: <span style="color: #fff; font-weight: 600;">${totalQty}</span></div>
+                <div style="color: var(--text-muted);">Сумма: <span style="color: var(--accent-primary); font-weight: 700;">${totalCost.toFixed(2)} ${curr}</span></div>
             `;
         };
         updateTotalsFull();
@@ -1136,8 +1182,8 @@ function renderValidationSummary(validation) {
     if (!summaryEl) return;
 
     summaryEl.style.marginBottom = '24px';
-    summaryEl.innerHTML = `<h3 style="margin: 0 0 16px 0; font-size: 16px; display: flex; align-items: center; gap: 10px;">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6366f1" stroke-width="2">
+    summaryEl.innerHTML = `<h3>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" stroke-width="2">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
         </svg>
         Отчет о кросс-валидации
@@ -1145,9 +1191,9 @@ function renderValidationSummary(validation) {
 
     if (validation.errors.length === 0 && validation.warnings.length === 0) {
         summaryEl.innerHTML += `
-            <div style="background: rgba(16, 185, 129, 0.08); border: 1px solid rgba(16, 185, 129, 0.2); border-radius: 12px; padding: 14px 18px; color: #34d399; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 12px;">
-                <span style="font-size: 18px;">✅</span>
-                Данные во всех документах совпадают. Противоречий не обнаружено.
+            <div class="validation-card success">
+                <div class="validation-icon">✅</div>
+                <div class="validation-text">Данные во всех документах совпадают. Противоречий не обнаружено.</div>
             </div>
         `;
         return;
@@ -1160,31 +1206,26 @@ function renderValidationSummary(validation) {
 
     validation.errors.forEach(err => {
         const div = document.createElement('div');
-        div.style.background = 'rgba(239, 68, 68, 0.08)';
-        div.style.border = '1px solid rgba(239, 68, 68, 0.2)';
-        div.style.borderRadius = '12px';
-        div.style.padding = '12px 16px';
-        div.style.color = '#f87171';
-        div.style.fontSize = '13px';
-        div.innerHTML = `<span style="margin-right:8px;">❌</span> <strong>Ошибка:</strong> ${err.message}`;
+        div.className = 'validation-card error';
+        div.innerHTML = `
+            <div class="validation-icon">❌</div>
+            <div class="validation-text"><strong>Ошибка:</strong> ${err.message}</div>
+        `;
         list.appendChild(div);
     });
 
     validation.warnings.forEach(warn => {
         const div = document.createElement('div');
         const isSuccess = warn.severity === 'SUCCESS';
+        div.className = `validation-card ${isSuccess ? 'success' : 'warning'}`;
 
-        div.style.background = isSuccess ? 'rgba(16, 185, 129, 0.08)' : 'rgba(245, 158, 11, 0.08)';
-        div.style.border = isSuccess ? '1px solid rgba(16, 185, 129, 0.2)' : '1px solid rgba(245, 158, 11, 0.2)';
-        div.style.borderRadius = '12px';
-        div.style.padding = '12px 16px';
-        div.style.color = isSuccess ? '#34d399' : '#fbbf24';
-        div.style.fontSize = '13px';
-
-        const icon = isSuccess ? '' : '<span style="margin-right:8px;">⚠️</span> ';
+        const icon = isSuccess ? '✅' : '⚠️';
         const label = isSuccess ? '' : '<strong>Внимание:</strong> ';
 
-        div.innerHTML = `${icon}${label}${warn.message}`;
+        div.innerHTML = `
+            <div class="validation-icon">${icon}</div>
+            <div class="validation-text">${label}${warn.message}</div>
+        `;
         list.appendChild(div);
     });
 
@@ -1488,26 +1529,67 @@ function renderHistory() {
                 day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
             });
 
-            const tractor = item.result?.mergedData?.vehicles?.tractorRegNumber || '';
-            const trailer = item.result?.mergedData?.vehicles?.trailerRegNumber || '';
-            const vehicleText = tractor ? `${tractor}${trailer ? ' / ' + trailer : ''}` : (item.files[0] || 'Анализ');
+            const res = item.result || {};
+            const merged = res.mergedData || res;
+            const vehicles = merged.vehicles || {};
+            const tractor = vehicles.tractorRegNumber || '';
+            const trailer = vehicles.trailerRegNumber || '';
+
+            let vehicleText = tractor ? `${tractor}${trailer ? ' / ' + trailer : ''}` : '';
+
+            // Fallback: If mergedData has no vehicle number, check if any document has a number that looks like a vehicle reg
+            if (!vehicleText && res.documents) {
+                // Documents that are likely to contain vehicle info: CMR (09014), TIR (09013), or files containing "рег", "тс", "номер"
+                const vDoc = res.documents.find(d =>
+                    d.type === '09013' || d.type === '09014' ||
+                    ['рег', 'тс', 'номер', 'авто'].some(k => d.filename?.toLowerCase().includes(k))
+                );
+                if (vDoc && vDoc.number) {
+                    vehicleText = vDoc.number;
+                }
+            }
+
+            if (!vehicleText) {
+                vehicleText = item.files[0] || 'Анализ';
+            }
+
+            const isVehicle = (vehicleText !== (item.files[0] || 'Анализ'));
             const filesText = item.files.join(', ');
 
             const card = document.createElement('div');
             card.className = 'history-item';
             card.innerHTML = `
                 <div class="history-item-header">
-                    <div style="display: flex; align-items: center;">
-                        <div class="history-item-date">${date}</div>
-                        <button class="history-delete-btn" title="Удалить">🗑️</button>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span class="history-item-date">${date}</span>
                     </div>
-                    <div class="history-item-duration">${item.duration || ''}</div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span class="history-item-duration">${item.duration || ''}</span>
+                        <button class="history-delete-btn" title="Удалить">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                            </svg>
+                        </button>
+                    </div>
                 </div>
-                <div class="history-item-files" style="font-size: 15px; color: #fff; margin-bottom: 4px;" title="${filesText}">
-                    ${tractor ? '🚚 ' : ''}${vehicleText}
+                <div class="history-item-files" title="${filesText}">
+                    ${isVehicle ? '🚚 ' : '📄 '}${vehicleText}
                 </div>
                 <div class="history-item-meta">
-                    ${item.files.length} док. • ${item.result?.mergedData?.products?.length || 0} позиций
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                            <polyline points="14 2 14 8 20 8"></polyline>
+                        </svg>
+                        ${item.files.length} док.
+                    </div>
+                    <span>•</span>
+                    <div style="display: flex; align-items: center; gap: 4px;">
+                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"></path>
+                        </svg>
+                        ${item.result?.mergedData?.products?.length || 0} товаров
+                    </div>
                 </div>
             `;
 

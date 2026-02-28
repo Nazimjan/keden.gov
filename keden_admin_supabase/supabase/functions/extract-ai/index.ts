@@ -172,6 +172,9 @@ serve(async (req) => {
             action = jsonBody.action || "extract";
         }
 
+        // Ensure fio is not just whitespace
+        if (!fio || fio.trim() === "") fio = "Пользователь";
+
         const supabaseUrl = Deno.env.get("SUPABASE_URL");
         const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 

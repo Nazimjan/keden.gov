@@ -177,6 +177,7 @@ function buildCounteragentPayload(source, extra) {
                 ru: "Документ, свидетельствующий о включении лица в Реестр уполномоченных экономических операторов"
             },
             country: getCountryByCode("KZ"),
+            regCode: "103",
             regKindCode: regDoc.regKindCode || "1"
         };
     }

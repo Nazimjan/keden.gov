@@ -490,56 +490,59 @@ document.getElementById('startBtn').onclick = async () => {
 
 // fileInput.onchange is handled globally in ui.js now
 
-document.getElementById('confirmFillBtn').onclick = async () => {
-    logButtonClick('confirmFillBtn');
+const confirmFillBtn = document.getElementById('confirmFillBtn');
+if (confirmFillBtn) {
+    confirmFillBtn.onclick = async () => {
+        logButtonClick('confirmFillBtn');
 
-    // Validation errors check removed as per user request to never block filling
-    /*
-    if (currentAIData && currentAIData.validation && currentAIData.validation.errors && currentAIData.validation.errors.length > 0) {
-        showToast('Пожалуйста, исправьте ошибки перед заполнением. ' + currentAIData.validation.errors[0].message, 'error');
-        return;
-    }
-    */
+        // Validation errors check removed as per user request to never block filling
+        /*
+        if (currentAIData && currentAIData.validation && currentAIData.validation.errors && currentAIData.validation.errors.length > 0) {
+            showToast('Пожалуйста, исправьте ошибки перед заполнением. ' + currentAIData.validation.errors[0].message, 'error');
+            return;
+        }
+        */
 
-    const scrapedData = scrapePreviewData();
-    if (!scrapedData) return;
-    if (currentUserInfo && currentUserInfo.iin) {
-        if (!scrapedData.counteragents) scrapedData.counteragents = {};
-        scrapedData.counteragents.filler = { iin: currentUserInfo.iin };
-    }
-    showLoading(true, '🚀 Заполнение ПИ...');
-    setStatus('🚀 Заполнение ПИ...');
+        const scrapedData = scrapePreviewData();
+        if (!scrapedData) return;
 
-    try {
-        let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (!tab || !tab.url || !tab.url.includes('keden.kgd.gov.kz')) {
-            const tabs = await chrome.tabs.query({ url: "*://keden.kgd.gov.kz/*" });
-            const kedenTab = tabs.find(t => t.url && t.url.includes('keden.kgd.gov.kz'));
-            if (kedenTab) tab = kedenTab;
-            else throw new Error('Откройте вкладку Keden с ПИ декларацией');
+        if (currentUserInfo && currentUserInfo.iin) {
+            if (!scrapedData.counteragents) scrapedData.counteragents = {};
+            scrapedData.counteragents.filler = { iin: currentUserInfo.iin };
         }
 
+        showLoading(true, '🚀 Заполнение ПИ...');
 
+        try {
+            let [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (!tab || !tab.url || !tab.url.includes('keden.kgd.gov.kz')) {
+                const tabs = await chrome.tabs.query({ url: "*://keden.kgd.gov.kz/*" });
+                const kedenTab = tabs.find(t => t.url && t.url.includes('keden.kgd.gov.kz'));
+                if (kedenTab) tab = kedenTab;
+                else throw new Error('Откройте вкладку Keden с ПИ декларацией');
+            }
 
-        chrome.tabs.sendMessage(tab.id, { action: 'FILL_PI_DATA', data: scrapedData }, (response) => {
-            if (chrome.runtime.lastError) {
-                setStatus('🔄 Перезагрузка страницы Keden...');
-                chrome.tabs.reload(tab.id);
-                showToast('Страница Keden перезагружена. Нажмите кнопку еще раз через 2-3 секунды.', 'info');
-                showLoading(false);
-                return;
-            }
-            if (response && response.success) {
-                setStatus('✅ Готово! Данные успешно отправлены.');
-                sendAdminLog('FILL_PI', `Заполнение ПИ декларации`);
-            } else {
-                setStatus('❌ ' + (response ? response.error : 'Ошибка'));
-            }
+            chrome.tabs.sendMessage(tab.id, { action: 'FILL_PI_DATA', data: scrapedData }, (response) => {
+                if (chrome.runtime.lastError) {
+                    if (typeof setStatus === 'function') setStatus('🔄 Перезагрузка страницы Keden...');
+                    chrome.tabs.reload(tab.id);
+                    showToast('Страница Keden начата перезагружаться. Нажмите кнопку еще раз через 2-3 секунды.', 'info');
+                    showLoading(false);
+                    return;
+                }
+                if (response && response.success) {
+                    const finalTime = stopTimer();
+                    showFillSuccess(finalTime);
+                    sendAdminLog('FILL_PI', `Заполнение ПИ декларации`);
+                } else {
+                    showToast('Ошибка: ' + (response ? response.error : 'Неизвестно'), 'error');
+                    showLoading(false);
+                }
+            });
+        } catch (error) {
+            console.error(error);
+            showToast('Ошибка: ' + error.message, 'error');
             showLoading(false);
-        });
-    } catch (error) {
-        console.error(error);
-        setStatus('❌ ' + error.message);
-        showLoading(false);
-    }
-};
+        }
+    };
+}

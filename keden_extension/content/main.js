@@ -326,6 +326,7 @@ async function fillCounteragents(params) {
                     documentType: typeInfo,
                     docNumber: mainDoc.number || "Б/Н",
                     docDate: formatToISODate(mainDoc.date) || new Date().toISOString().split('T')[0],
+                    regCode: docCode === '09011' ? "103" : null,
                     regKindCode: docCode === '09011' ? "1" : null
                 };
 
@@ -444,17 +445,6 @@ async function fillCounteragents(params) {
         requests.push(carrierPayload);
     }
 
-    // 5. Двойная проверка Декларанта (TЗ п.5)
-    let existingDeclarant = null;
-    try {
-        const fullDecl = await getPIDeclaration(declId, headers);
-        if (fullDecl && fullDecl.counteragents) {
-            existingDeclarant = fullDecl.counteragents.find(c => c.type === 'DECLARANT');
-        }
-    } catch (e) {
-        console.warn("Failed to check existing counteragents:", e);
-    }
-
     const declarantPayload = buildCounteragentPayload(counteragents.declarant, {
         type: "DECLARANT",
         targetId: declId,
@@ -469,14 +459,9 @@ async function fillCounteragents(params) {
             ru: "Декларант"
         }
     });
-
     if (declarantPayload) {
-        if (existingDeclarant) {
-            console.log("ℹ️ Declarant already exists, skipping creation to avoid duplicates.");
-        } else {
-            validateResidentInfo(declarantPayload, "Декларант");
-            requests.push(declarantPayload);
-        }
+        validateResidentInfo(declarantPayload, "Декларант");
+        requests.push(declarantPayload);
     }
 
     // ТЗ: Отправка заполнителя (брокера) напрямую из app-person
@@ -655,8 +640,8 @@ async function fillCounteragents(params) {
     // ОБРАБОТКА ДОКУМЕНТОВ 44 ГРАФЫ (Box 44 Automation)
     await processBox44Documents(consignmentId, params, createdProductIds, headers);
 
-    showKedenNotification("Данные успешно отправлены.", "success");
-    setTimeout(() => window.location.reload(), 1500);
+    showKedenNotification('Данные успешно заполнены! Страница сейчас перезагрузится...', 'success');
+    setTimeout(() => window.location.reload(), 2500);
 }
 
 async function processBox44Documents(consignmentId, params, productIds, headers) {
@@ -794,6 +779,7 @@ async function processBox44Documents(consignmentId, params, productIds, headers)
                     documentType: typeInfo,
                     docNumber: firstDoc.number || "б/н",
                     docDate: (firstDoc.date && firstDoc.date !== "Б/Д" && firstDoc.date !== "б/д") ? formatToISODate(firstDoc.date) : null,
+                    regCode: bestCode === '09011' ? "103" : null,
                     regKindCode: bestCode === '09011' ? "1" : null,
                     files: attachedFiles
                 };
@@ -845,40 +831,66 @@ function showKedenNotification(message, type = 'info') {
             flex-direction: column;
             gap: 12px;
             pointer-events: none;
-            font-family: 'Inter', -apple-system, system-ui, sans-serif;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
         `;
         document.body.appendChild(container);
 
         const style = document.createElement('style');
         style.textContent = `
-            @keyframes kedenFadeIn {
-                from { transform: translateX(100%) scale(0.9); opacity: 0; }
-                to { transform: translateX(0) scale(1); opacity: 1; }
+            @keyframes kedenSlideIn {
+                0% { transform: translateY(-20px) scale(0.95); opacity: 0; }
+                100% { transform: translateY(0) scale(1); opacity: 1; }
             }
-            @keyframes kedenFadeOut {
-                to { transform: translateX(120%); opacity: 0; }
+            @keyframes kedenSlideOut {
+                0% { transform: translateY(0) scale(1); opacity: 1; }
+                100% { transform: translateY(-20px) scale(0.95); opacity: 0; }
             }
             .keden-toast {
-                background: #0f172a;
-                color: white;
-                padding: 16px 24px;
-                border-radius: 12px;
-                box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.4);
-                min-width: 300px;
-                max-width: 450px;
+                background: rgba(255, 255, 255, 0.85);
+                backdrop-filter: blur(12px);
+                -webkit-backdrop-filter: blur(12px);
+                color: #1e293b;
+                padding: 16px 20px;
+                border-radius: 16px;
+                box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(255, 255, 255, 0.5) inset;
+                min-width: 320px;
+                max-width: 480px;
                 pointer-events: auto;
-                animation: kedenFadeIn 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+                animation: kedenSlideIn 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
                 display: flex;
                 align-items: center;
-                gap: 12px;
-                font-size: 14px;
+                gap: 16px;
+                font-size: 15px;
                 font-weight: 500;
                 line-height: 1.5;
-                border: 1px solid rgba(255,255,255,0.1);
+                transition: all 0.3s ease;
+                border: 1px solid rgba(0, 0, 0, 0.05);
             }
-            .keden-toast.success { border-left: 5px solid #10b981; }
-            .keden-toast.error { border-left: 5px solid #ef4444; }
-            .keden-toast.info { border-left: 5px solid #3b82f6; }
+            .keden-toast-icon {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-width: 40px;
+                height: 40px;
+                border-radius: 12px;
+                font-size: 20px;
+            }
+            .keden-toast.success .keden-toast-icon { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+            .keden-toast.error .keden-toast-icon { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+            .keden-toast.info .keden-toast-icon { background: rgba(59, 130, 246, 0.15); color: #3b82f6; }
+            
+            .keden-toast.success { border-left: 4px solid #10b981; }
+            .keden-toast.error { border-left: 4px solid #ef4444; }
+            .keden-toast.info { border-left: 4px solid #3b82f6; }
+            
+            .keden-toast-close {
+                margin-left: auto;
+                cursor: pointer;
+                opacity: 0.5;
+                font-size: 18px;
+                transition: opacity 0.2s;
+            }
+            .keden-toast-close:hover { opacity: 1; }
         `;
         document.head.appendChild(style);
     }
@@ -887,19 +899,21 @@ function showKedenNotification(message, type = 'info') {
     toast.className = `keden-toast ${type}`;
 
     let icon = 'ℹ️';
-    if (type === 'success') icon = '✅';
-    if (type === 'error') icon = '❌';
+    if (type === 'success') icon = '✨';
+    if (type === 'error') icon = '⚠️';
 
     toast.innerHTML = `
-        <span style="font-size: 20px;">${icon}</span>
-        <div style="flex: 1;">${message}</div>
+        <div class="keden-toast-icon">${icon}</div>
+        <div style="flex: 1; text-shadow: 0 1px 1px rgba(255,255,255,0.8);">${message}</div>
     `;
 
     container.appendChild(toast);
 
     setTimeout(() => {
-        toast.style.animation = 'kedenFadeOut 0.5s forwards';
-        setTimeout(() => toast.remove(), 500);
+        if (toast.parentNode) {
+            toast.style.animation = 'kedenSlideOut 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards';
+            setTimeout(() => toast.remove(), 400);
+        }
     }, 5000);
 }
 
