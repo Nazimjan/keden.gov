@@ -255,6 +255,7 @@ function mapProductsPayload(aiProducts) {
             guid: `${index}_${Math.random().toString(36).substring(2, 10)}`,
             tnvedCode: tnved,
             commercialName: p.commercialName || "Товар",
+            quantity: "1",
             cargoSeatQuantity: p.quantity?.toString() || "0",
             packagingPalletsInfoPackageQuantity: p.quantity?.toString() || "0",
             grossWeight: p.grossWeight?.toString() || "0",
