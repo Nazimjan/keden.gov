@@ -135,7 +135,11 @@ function buildCounteragentPayload(source, extra) {
         }
     }
 
-    if (source.nonResidentLegal) payload.nonResidentLegal = source.nonResidentLegal;
+    // Only include nonResidentLegal if it has actual content.
+    // An empty { nameRu: "" } causes FLK errors for resident entities.
+    if (source.nonResidentLegal && source.nonResidentLegal.nameRu) {
+        payload.nonResidentLegal = source.nonResidentLegal;
+    }
 
     if (source.kedenData && source.kedenData.iin) {
         // Если есть официальные данные от Keden для физлица - используем их для блока person

@@ -127,6 +127,37 @@ async function fillCounteragents(params) {
 
                 await updatePIDeclaration(declId, currentDecl, headers);
                 console.log('✅ Vehicle data updated successfully');
+
+                // Clone vehicleAtBorder → vehicleArrivalCustom so FLK B.042.00874_2 passes.
+                // The server does NOT auto-populate vehicleArrivalCustom.vehicles
+                // even with matchesVehicleAtBorder: true — it only creates an empty shell.
+                try {
+                    await new Promise(r => setTimeout(r, 500));
+                    const refreshedDecl = await getPIDeclaration(declId, headers);
+                    const vab = refreshedDecl.productsTransportation?.vehicleAtBorder;
+                    if (vab && Array.isArray(vab.vehicles) && vab.vehicles.length > 0) {
+                        // Clone vehicles for vehicleArrivalCustom, stripping server IDs
+                        const clonedVehicles = vab.vehicles.map(v => ({
+                            ...v,
+                            id: refreshedDecl.productsTransportation.vehicleArrivalCustom?.vehicles?.find(
+                                av => av.indexOrder === v.indexOrder
+                            )?.id || null,
+                            vehicleTypeInformationId: refreshedDecl.productsTransportation.vehicleArrivalCustom?.id || null
+                        }));
+                        refreshedDecl.productsTransportation.vehicleArrivalCustom = {
+                            ...refreshedDecl.productsTransportation.vehicleArrivalCustom,
+                            vehicleType: vab.vehicleType,
+                            transportMeansQuantity: vab.transportMeansQuantity,
+                            vehicles: clonedVehicles,
+                            multimodalitySign: vab.multimodalitySign || false,
+                            routePoints: vab.routePoints || []
+                        };
+                        await updatePIDeclaration(declId, refreshedDecl, headers);
+                        console.log('✅ vehicleArrivalCustom populated from vehicleAtBorder');
+                    }
+                } catch (resaveErr) {
+                    console.warn('⚠️ vehicleArrivalCustom sync failed:', resaveErr);
+                }
             }
         } catch (vehErr) {
             console.error('❌ Vehicle update failed:', vehErr);
@@ -598,6 +629,25 @@ async function fillCounteragents(params) {
                     // Это гарантирует, что водитель тоже скопируется в новый раздел
                     await copyCounteragent(carrierId, declId, 'PRELIMINARY', 'TRANSPORTER', headers);
                     console.log('✅ Carrier (with driver) copied to transporter section');
+
+                    // Post-copy cleanup: strip stale nonResidentLegal for resident transporters.
+                    // The copy API carries over whatever the server stored for the carrier,
+                    // including any empty nonResidentLegal that causes FLK "shortName" errors.
+                    try {
+                        await new Promise(r => setTimeout(r, 500));
+                        const transporters = await getCounteragents(declId, 'PRELIMINARY', 'TRANSPORTER', headers);
+                        if (Array.isArray(transporters) && transporters.length > 0) {
+                            const t = transporters[transporters.length - 1];
+                            const isResident = t.entityType && !t.entityType.includes('NON_RESIDENT');
+                            if (isResident && t.nonResidentLegal) {
+                                delete t.nonResidentLegal;
+                                await updateCounteragent(t.id, t, headers);
+                                console.log('✅ Transporter re-saved: cleared stale nonResidentLegal');
+                            }
+                        }
+                    } catch (resaveErr) {
+                        console.warn('⚠️ Transporter re-save failed:', resaveErr);
+                    }
 
                 } catch (err) {
                     console.error('❌ Carrier/Driver automation failed:', err);
