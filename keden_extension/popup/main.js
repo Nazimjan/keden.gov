@@ -505,6 +505,7 @@ document.getElementById('startBtn').onclick = async () => {
             payload: {
                 documents,
                 iin: currentUserInfo ? currentUserInfo.iin : '000000000000',
+                fio: currentUserInfo ? currentUserInfo.fio : 'Пользователь',
                 targetTabId: tab ? tab.id : null
             }
         });

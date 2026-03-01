@@ -165,6 +165,7 @@ async function logExtensionAction(actionType, description = '') {
             action: 'LOG_ACTION',
             payload: {
                 iin: userInfo.iin,
+                fio: userInfo.fio,
                 action_type: actionType,
                 description: description
             }

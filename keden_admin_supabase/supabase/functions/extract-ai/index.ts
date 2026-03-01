@@ -192,6 +192,7 @@ serve(async (req) => {
             .single();
 
         if (userError) {
+            // New user registration
             const { data: newUser, error: createError } = await supabase
                 .from("users")
                 .insert({ iin, fio, credits: 10, is_allowed: true })
@@ -199,6 +200,14 @@ serve(async (req) => {
 
             if (createError) throw new Error(`Database Error: ${createError.message}`);
             user = newUser;
+        } else if (user && (user.fio === "Пользователь" || !user.fio) && fio !== "Пользователь" && fio !== iin) {
+            // Update user if they exist but have default name, but only if NEW fio is real
+            const { data: updatedUser, error: updateError } = await supabase
+                .from("users")
+                .update({ fio })
+                .eq("id", user.id)
+                .select().single();
+            if (!updateError && updatedUser) user = updatedUser;
         }
 
         const checkAndDeductCredits = async () => {

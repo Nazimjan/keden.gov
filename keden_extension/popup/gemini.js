@@ -10,7 +10,7 @@ async function analyzeAllFilesAgent(fileParts, fileNames) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({
       action: 'ANALYZE_BATCH',
-      payload: { iin, fileParts, fileNames }
+      payload: { iin, fio: currentUserInfo?.fio || 'Пользователь', fileParts, fileNames }
     }, (response) => {
       if (chrome.runtime.lastError) {
         reject(new Error(`Ошибка связи: ${chrome.runtime.lastError.message}`));
