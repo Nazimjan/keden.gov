@@ -393,7 +393,7 @@ serve(async (req) => {
                 }
             }
 
-            const prompt = getBatchPrompt(originalFileNames || storagePaths);
+            const prompt = getBatchPrompt([...new Set(originalFileNames || storagePaths)] as string[]);
             const models = ["google/gemini-3-flash-preview", "google/gemini-2.0-flash-001", "qwen/qwen3.5-plus-02-15"];
 
             let aiData;

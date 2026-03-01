@@ -211,10 +211,8 @@ async function handleExtraction(documents, iin, fio, targetTabId) {
 
     try {
         const storagePaths = [];
-        // Маппинг: индекс пути → оригинальное имя файла
+        // Маппинг: индекс пути → оригинальное имя файла (СИНХРОНИЗИРОВАН с storagePaths)
         const originalFileNames = [];
-        // Для дедупликации: отслеживаем уже добавленные имена файлов
-        const seenFileNames = new Set();
 
         // 1. Загрузка файлов в Supabase Storage
         for (const doc of documents) {
@@ -242,11 +240,9 @@ async function handleExtraction(documents, iin, fio, targetTabId) {
 
                     const uploadedData = await uploadWithRetry(fileName, blobData, mimeType, doc.fileName);
                     storagePaths.push(uploadedData.path);
-                    // Дедупликация: добавляем имя только один раз (для PDF с несколькими страницами)
-                    if (!seenFileNames.has(doc.fileName)) {
-                        originalFileNames.push(doc.fileName);
-                        seenFileNames.add(doc.fileName);
-                    }
+                    // ВАЖНО: originalFileNames[i] всегда соответствует storagePaths[i]
+                    // Для multi-page PDF одно имя файла повторяется для каждой страницы
+                    originalFileNames.push(doc.fileName);
                 }
             }
         }
