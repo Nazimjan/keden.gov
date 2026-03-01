@@ -394,7 +394,7 @@ serve(async (req) => {
             }
 
             const prompt = getBatchPrompt([...new Set(originalFileNames || storagePaths)] as string[]);
-            const models = ["google/gemini-3-flash-preview", "anthropic/claude-haiku-4.5"];
+            const models = ["anthropic/claude-haiku-4.5", "google/gemini-3-flash-preview"];
 
             let aiData;
             for (const model of models) {
