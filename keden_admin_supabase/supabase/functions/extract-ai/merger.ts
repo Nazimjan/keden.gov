@@ -23,6 +23,18 @@ export function mergeAgentResults(agentResults: any[]) {
         },
     };
 
+    // Schema version check — allows future format changes without breaking mergeAgentResults
+    const SUPPORTED_SCHEMA = "1.0";
+    for (const result of agentResults) {
+        const version = result.schemaVersion;
+        if (!version || version === SUPPORTED_SCHEMA) continue;
+        merged.validation.warnings.push({
+            field: "schemaVersion",
+            message: `Неизвестная версия схемы AI-ответа: "${version}". Ожидается "${SUPPORTED_SCHEMA}". Возможны ошибки парсинга.`,
+            severity: "WARNING",
+        });
+    }
+
     const mentions: any = {
         consignor: [],
         consignee: [],
@@ -137,7 +149,7 @@ export function mergeAgentResults(agentResults: any[]) {
 
     // Мерж стран
     if (mentions.countries.length > 0) {
-        const best = mentions.countries.find((m: any) => m.source.includes("CMR")) || mentions.countries[0];
+        const best = mentions.countries.find((m: any) => m.source.toLowerCase().includes("cmr")) || mentions.countries[0];
         merged.mergedData.countries.departureCountry = (best.data.departureCountry || "").toUpperCase();
         merged.mergedData.countries.destinationCountry = (best.data.destinationCountry || "").toUpperCase();
     }

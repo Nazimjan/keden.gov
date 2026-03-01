@@ -1,0 +1,48 @@
+{
+  "_comment": "Anonymized test fixture — no real PII. Replace BIN/IIN with real values only in local testing.",
+  "declarationId": "PI-000000-TEST",
+  "consignor": {
+    "name": "ТЕСТОВАЯ КОМПАНИЯ ОТПРАВИТЕЛЬ",
+    "countryCode": "CN"
+  },
+  "consignee": {
+    "name": "ТОО ТЕСТОВЫЙ ПОЛУЧАТЕЛЬ",
+    "bin": "000000000000",
+    "countryCode": "KZ"
+  },
+  "vehicles": {
+    "tractorRegNumber": "TEST001",
+    "tractorCountry": "KZ",
+    "trailerRegNumber": "TEST002",
+    "trailerCountry": "KZ"
+  },
+  "countries": {
+    "departureCountry": "CN",
+    "destinationCountry": "KZ"
+  },
+  "shipping": {
+    "transportMode": "31",
+    "customsCode": "57505",
+    "destCustomsCode": "55510"
+  },
+  "products": [
+    {
+      "description": "Тестовый товар",
+      "tnvedCode": "8471300000",
+      "quantity": 10,
+      "unit": "шт",
+      "netWeight": 100.0,
+      "grossWeight": 110.0,
+      "cost": 1000.00,
+      "currency": "USD"
+    }
+  ],
+  "documents": [
+    {
+      "type": "INVOICE",
+      "number": "INV-TEST-001",
+      "date": "01.01.2025",
+      "filename": "invoice_test.pdf"
+    }
+  ]
+}

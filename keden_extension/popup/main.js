@@ -181,7 +181,9 @@ async function sendAdminLog(actionType, description = '') {
             action_type: actionType,
             description
         });
-    } catch (e) { /* silent fail */ }
+    } catch (e) {
+        console.warn('[Keden] sendAdminLog: failed to write log', e.message);
+    }
 }
 
 /**
@@ -191,12 +193,27 @@ function showAccessDenied(message) {
     const overlay = document.createElement('div');
     overlay.id = 'access-denied-overlay';
     overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(10,14,26,0.95);z-index:10000;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px;padding:40px;text-align:center;';
-    overlay.innerHTML = `
-        <div style="font-size:64px">🔒</div>
-        <h2 style="color:#f1f5f9;font-size:1.5rem;">Доступ запрещён</h2>
-        <p style="color:#94a3b8;max-width:400px;line-height:1.6;">${message}</p>
-        <p style="color:#64748b;font-size:0.8rem;margin-top:20px;">Обратитесь к администратору для получения доступа</p>
-    `;
+
+    const iconEl = document.createElement('div');
+    iconEl.style.fontSize = '64px';
+    iconEl.textContent = '🔒';
+
+    const titleEl = document.createElement('h2');
+    titleEl.style.cssText = 'color:#f1f5f9;font-size:1.5rem;';
+    titleEl.textContent = 'Доступ запрещён';
+
+    const msgEl = document.createElement('p');
+    msgEl.style.cssText = 'color:#94a3b8;max-width:400px;line-height:1.6;';
+    msgEl.textContent = message;
+
+    const hintEl = document.createElement('p');
+    hintEl.style.cssText = 'color:#64748b;font-size:0.8rem;margin-top:20px;';
+    hintEl.textContent = 'Обратитесь к администратору для получения доступа';
+
+    overlay.appendChild(iconEl);
+    overlay.appendChild(titleEl);
+    overlay.appendChild(msgEl);
+    overlay.appendChild(hintEl);
     document.body.appendChild(overlay);
 }
 
@@ -214,13 +231,6 @@ function showAccessDenied(message) {
     // Display auth status
     const authStatusDiv = document.getElementById('authStatus');
     if (authStatusDiv && result.user) {
-        let subText = '';
-        if (result.user.hasSubscription) {
-            subText = `<span style="color: #4ade80;">Безлимит до: ${result.user.subscription_end.split('T')[0]}</span>`;
-        } else {
-            subText = `<span style="color: #4ade80;">Кредитов: ${result.user.credits || 0} ПИ</span>`;
-        }
-
         const fio = result.user.fio || result.user.iin || '';
         // Показываем Фамилию + Инициалы (напр. Турлубеков М.Т.)
         const fioParts = fio.trim().split(/\s+/);
@@ -228,14 +238,35 @@ function showAccessDenied(message) {
             ? fioParts[0] + ' ' + fioParts.slice(1).map(p => p[0] ? p[0] + '.' : '').join('')
             : fio;
 
-        authStatusDiv.innerHTML = `
-            <div style="font-size: 10px; color: #64748b; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em;">Добро пожаловать</div>
-            <div style="font-weight: 700; font-size: 13px; color: #f1f5f9; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${fio}">${shortFio}</div>
-            <div style="display: flex; align-items: center; gap: 6px;">
-                <span style="display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #4ade80;"></span>
-                <span style="font-size: 11px;">${subText}</span>
-            </div>
-        `;
+        const greetEl = document.createElement('div');
+        greetEl.style.cssText = 'font-size: 10px; color: #64748b; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em;';
+        greetEl.textContent = 'Добро пожаловать';
+
+        const nameEl = document.createElement('div');
+        nameEl.style.cssText = 'font-weight: 700; font-size: 13px; color: #f1f5f9; margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;';
+        nameEl.title = fio;
+        nameEl.textContent = shortFio;
+
+        const dotEl = document.createElement('span');
+        dotEl.style.cssText = 'display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #4ade80;';
+
+        const subSpan = document.createElement('span');
+        subSpan.style.fontSize = '11px';
+        subSpan.style.color = '#4ade80';
+        if (result.user.hasSubscription) {
+            subSpan.textContent = `Безлимит до: ${(result.user.subscription_end || '').split('T')[0]}`;
+        } else {
+            subSpan.textContent = `Кредитов: ${result.user.credits || 0} ПИ`;
+        }
+
+        const rowEl = document.createElement('div');
+        rowEl.style.cssText = 'display: flex; align-items: center; gap: 6px;';
+        rowEl.appendChild(dotEl);
+        rowEl.appendChild(subSpan);
+
+        authStatusDiv.appendChild(greetEl);
+        authStatusDiv.appendChild(nameEl);
+        authStatusDiv.appendChild(rowEl);
         authStatusDiv.style.display = 'block';
     }
 

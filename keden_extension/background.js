@@ -35,7 +35,9 @@ async function updateState(updates) {
     await chrome.storage.local.set({ extractionState: newState });
 
     // Notify open popup or other pages
-    chrome.runtime.sendMessage({ action: 'STATE_UPDATED', state: newState }).catch(() => { });
+    chrome.runtime.sendMessage({ action: 'STATE_UPDATED', state: newState }).catch((e) => {
+        console.warn('[Keden] updateState: failed to notify popup', e.message);
+    });
 
     return newState;
 }

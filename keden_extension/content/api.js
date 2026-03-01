@@ -5,10 +5,7 @@ const COUNTERAGENT_API = `${PI_API}/counteragent`;
 // Прокси для запросов из Popup (чтобы использовать авторизацию страницы)
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'proxy_tnved') {
-        const token = localStorage.getItem('token') ||
-            localStorage.getItem('access_token') ||
-            localStorage.getItem('id_token') ||
-            sessionStorage.getItem('token');
+        const token = getKedenToken();
 
         fetch(`https://keden.kgd.gov.kz/api/v1/cnfea/cnfea?cnfeaCode=${request.code}&page=0&pageSize=5`, {
             headers: {

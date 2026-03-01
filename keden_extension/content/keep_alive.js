@@ -14,36 +14,6 @@
     let lastRefresh = 0;
 
     /**
-     * Extracts the current Keden token from various storage locations
-     */
-    function getKedenToken() {
-        try {
-            const authStorage = localStorage.getItem('auth-storage');
-            let token = null;
-
-            if (authStorage) {
-                const state = JSON.parse(authStorage).state;
-                if (state) {
-                    token = (state.token && (state.token.access_token || state.token.id_token || (typeof state.token === 'string' ? state.token : null))) ||
-                        (state.user && state.user.token) ||
-                        (state.userAccountData && state.userAccountData.token);
-                }
-            }
-
-            if (!token) {
-                token = localStorage.getItem('token') ||
-                    localStorage.getItem('access_token') ||
-                    sessionStorage.getItem('token') ||
-                    sessionStorage.getItem('access_token');
-            }
-
-            return token;
-        } catch (e) {
-            return null;
-        }
-    }
-
-    /**
      * Simulates a tiny user activity to fool client-side idle timers
      */
     function simulateActivity() {
@@ -57,7 +27,9 @@
             if (activeEl) {
                 activeEl.dispatchEvent(new Event('focus', { bubbles: true }));
             }
-        } catch (e) { }
+        } catch (e) {
+            console.warn('[Keden Keep-Alive] simulateActivity error:', e.message);
+        }
     }
 
     /**

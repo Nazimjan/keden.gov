@@ -14,9 +14,12 @@ export function normalizeName(name: string): string {
         "PRIVATE", "PUBLIC", "INTERNATIONAL", "TRADING", "GROUP",
     ];
 
+    // NOTE: \b does not work with Cyrillic characters in JS (only matches ASCII word chars).
+    // Use space/punctuation/string-boundary anchors instead.
     legalForms.forEach((form) => {
-        const regex = new RegExp(`\\b${form}\\b`, "g");
-        n = n.replace(regex, "");
+        const escaped = form.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const regex = new RegExp(`(?:^|[\\s,./\\-])${escaped}(?=[\\s,./\\-]|$)`, "g");
+        n = n.replace(regex, " ");
     });
 
     // 2. Оставляем только буквы и цифры

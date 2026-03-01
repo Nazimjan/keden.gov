@@ -1,4 +1,6 @@
-const VALID_ENTITY_TYPES = ["LEGAL", "NON_RESIDENT_LEGAL", "INDIVIDUAL", "NON_RESIDENT_PERSON", "ENTREPRENEUR", "NON_RESIDENT", "PERSON"];
+// "PERSON" and "NON_RESIDENT" intentionally excluded: they must be normalized
+// to "INDIVIDUAL" and "NON_RESIDENT_LEGAL" respectively before API submission.
+const VALID_ENTITY_TYPES = ["LEGAL", "NON_RESIDENT_LEGAL", "INDIVIDUAL", "NON_RESIDENT_PERSON", "ENTREPRENEUR"];
 
 function normalizeEntityType(entityType, name = "") {
     if (!entityType) return "LEGAL";

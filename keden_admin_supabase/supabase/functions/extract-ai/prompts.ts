@@ -142,7 +142,10 @@ NON_RESIDENT_LEGAL (иностранная): "nonResidentLegal": { "nameRu": "Н
 ФОРМАТ ОТВЕТА (JSON):
 ═══════════════════════════════════════════
 
+В корне JSON всегда добавляй "schemaVersion": "1.0".
+
 {
+  "schemaVersion": "1.0",
   "documents": [
     {
       "filename": "название файла",
@@ -282,12 +285,13 @@ NON_RESIDENT_LEGAL (иностранная): "nonResidentLegal": { "nameRu": "Н
 }
 `;
 
+/** Static system instructions — sent as role:"system". Does not change between requests. */
+export const SYSTEM_PROMPT = FILE_AGENT_PROMPT;
+
+/** Dynamic user message — file list + document count requirement. */
 export function getBatchPrompt(fileNames: string[]) {
   const fileList = fileNames.map((f: string, i: number) => `${i + 1}. ${f}`).join("\n");
-  return `
-${FILE_AGENT_PROMPT}
-
-Тебе переданы следующие файлы (строго в этом порядке):
+  return `Тебе переданы следующие файлы (строго в этом порядке):
 ${fileList}
 
 КРИТИЧЕСКИ ВАЖНО для массива "documents":
@@ -295,6 +299,6 @@ ${fileList}
 - Порядок СТРОГО совпадает с порядком файлов выше
 - В поле "filename" пиши ТОЧНО то имя файла, которое указано в списке выше (без изменений)
 - Для каждого файла определи тип по его СОДЕРЖИМОМУ, используя словесные типы выше (INVOICE, TRANSPORT_DOC, VEHICLE_PERMIT и т.д.)
-`;
+Return ONLY valid JSON.`;
 }
 

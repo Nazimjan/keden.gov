@@ -1,67 +1,5 @@
-function logButtonClick(buttonId) {
-    console.log('[popup] Button click:', {
-        buttonId,
-        timestamp: new Date().toISOString()
-    });
-}
-
-function setStatus(msg) {
-    const el = document.getElementById('statusMessage');
-    if (el) {
-        el.style.display = 'block';
-        el.innerText = msg;
-        el.style.animation = 'fadeIn 0.3s ease-out';
-    }
-
-    // Also update central loader status if exists
-    const loaderStatus = document.getElementById('loaderStatus');
-    if (loaderStatus) {
-        loaderStatus.innerText = msg;
-    }
-}
-
-function getConfidenceHTML(score) {
-    if (score === undefined || score === null) return '';
-
-    let type = 'high';
-    let text = 'Высокая';
-    let icon = 'M20 6L9 17l-5-5'; // Check icon
-
-    if (score < 0.6) {
-        type = 'low';
-        text = 'Низкая';
-        icon = 'M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01'; // Alert icon
-    } else if (score < 0.85) {
-        type = 'medium';
-        text = 'Средняя';
-        icon = 'M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zm0-10v.01M12 16h.01'; // Info/Question
-    }
-
-    const percent = Math.round(score * 100);
-
-    return `
-        <div class="confidence-badge confidence-${type}" title="Точность ИИ: ${percent}%">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-                <path d="${icon}"></path>
-            </svg>
-            ${text} ${percent}%
-        </div>
-    `;
-}
-
-function updateStepper(stepNumber) {
-    const steps = document.querySelectorAll('.step');
-    steps.forEach(step => {
-        const s = parseInt(step.dataset.step);
-        step.classList.remove('active', 'completed');
-
-        if (s < stepNumber) {
-            step.classList.add('completed');
-        } else if (s === stepNumber) {
-            step.classList.add('active');
-        }
-    });
-}
+// KEDEN Extension - UI Preview (предпросмотр, валидация, настройки)
+// Зависит от: ui_core.js, ui_files.js
 
 function initInlineValidation() {
     const inputs = document.querySelectorAll('.preview-input');
@@ -115,368 +53,6 @@ function initInlineValidation() {
         validate(); // Initial check
     });
 }
-
-function showToast(message, type = 'info') {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
-
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
-
-    let icon = 'ℹ️';
-    if (type === 'success') icon = '✅';
-    if (type === 'error') icon = '❌';
-
-    toast.innerHTML = `
-        <span style="font-size: 18px;">${icon}</span>
-        <div style="flex: 1;">${message}</div>
-        <div class="toast-progress"></div>
-    `;
-
-    container.appendChild(toast);
-
-    // Progress bar animation
-    const progress = toast.querySelector('.toast-progress');
-    const duration = 4000;
-    progress.style.transition = `transform ${duration}ms linear`;
-    progress.style.transform = 'scaleX(0)';
-
-    const timeout = setTimeout(() => {
-        toast.style.animation = 'toastOut 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards';
-        setTimeout(() => toast.remove(), 500);
-    }, duration);
-
-    toast.onclick = () => {
-        clearTimeout(timeout);
-        toast.style.animation = 'toastOut 0.5s cubic-bezier(0.16, 1, 0.3, 1) forwards';
-        setTimeout(() => toast.remove(), 500);
-    };
-}
-
-function updatePreviewPlaceholder() {
-    const previewArea = document.getElementById('previewArea');
-    const previewContent = document.getElementById('previewContent');
-    const container = document.getElementById('mainContainer');
-
-    if (previewContent && !currentAIData) {
-        previewContent.innerHTML = `
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: var(--text-secondary); text-align: center;">
-                <div style="font-size: 48px; opacity: 0.2; margin-bottom: 24px;">🔍</div>
-                <div style="font-size: 15px; font-weight: 500; color: #fff;">Ожидание документов</div>
-                <div style="font-size: 12px; margin-top: 8px; max-width: 200px;">После анализа здесь появятся извлеченные данные и предпросмотр</div>
-            </div>
-        `;
-    }
-}
-
-let _timerInterval = null;
-let _timerStartTime = null;
-
-function showLoading(show, message, forcedStartTime = null) {
-    const loader = document.getElementById('loader');
-    const startBtn = document.getElementById('startBtn');
-    const confirmBtn = document.getElementById('confirmFillBtn');
-
-    if (loader) loader.style.display = show ? 'block' : 'none';
-
-    // Блокируем только при анализе (когда message содержит 'анализ' или пусто)
-    const isAnalysis = !message || message.includes('анализ');
-
-    if (isAnalysis) {
-        if (startBtn) startBtn.disabled = show;
-        if (confirmBtn) confirmBtn.disabled = show;
-    }
-
-    const previewContent = document.getElementById('previewContent');
-    const existingTimer = document.getElementById('aiTimer');
-
-    if (show && isAnalysis) {
-        if (previewContent && !existingTimer) {
-            // Разворачиваем контейнер для анализа
-            const container = document.getElementById('mainContainer');
-            const previewArea = document.getElementById('previewArea');
-            if (container) {
-                container.classList.add('expanded');
-                document.body.style.width = '100vw';
-            }
-            if (previewArea) previewArea.style.display = 'block';
-
-            updateStepper(2); // Step 2: Analysis
-
-            previewContent.innerHTML = `
-                <div id="centralStatusOverlay" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 320px; text-align: center;">
-                    <div class="loader central-spinner" style="display: block; margin-bottom: 28px; width: 48px; height: 48px; border-width: 4px; border-top-color: #007AFF;"></div>
-                    <div id="loaderStatus" style="font-size: 18px; font-weight: 700; color: #fff; margin-bottom: 24px;">${message || 'AI анализирует документы...'}</div>
-                    <div id="aiTimerContainer">
-                        <div id="aiTimer" style="font-family: monospace; font-size: 22px; color: #fff; background: #0f172a; padding: 10px 24px; border-radius: 12px;">
-                            <span id="aiTimerValue">00:00.0</span>
-                        </div>
-                    </div>
-                </div>
-            `;
-        }
-        startTimer(forcedStartTime);
-    } else if (!show) {
-        if (previewContent) {
-            previewContent.style.pointerEvents = 'auto';
-            previewContent.style.filter = 'none';
-        }
-        const finalTime = stopTimer();
-        const spinner = document.querySelector('.central-spinner');
-        if (spinner) spinner.style.display = 'none';
-
-        const timer = document.getElementById('aiTimer');
-        if (timer) {
-            timer.style.animation = 'none';
-            timer.style.color = '#4ade80';
-            const container = document.getElementById('aiTimerContainer');
-            if (container) container.style.background = 'linear-gradient(135deg, rgba(74,222,128,0.4), rgba(34,197,94,0.4))';
-        }
-        return finalTime;
-    }
-}
-
-function showFillSuccess(finalTime) {
-    const statusEl = document.getElementById('loaderStatus');
-    const spinner = document.querySelector('.central-spinner');
-    const timer = document.getElementById('aiTimer');
-    const container = document.getElementById('aiTimerContainer');
-
-    if (spinner) spinner.style.display = 'none';
-
-    if (statusEl) {
-        statusEl.innerHTML = `
-            <div style="font-size: 48px; margin-bottom: 20px; animation: scaleIn 0.5s cubic-bezier(0.17, 0.67, 0.83, 0.67)">✅</div>
-            <div style="color: #4ade80;">Данные успешно заполнены!</div>
-            <div style="font-size: 14px; font-weight: 400; color: #94a3b8; margin-top: 12px; line-height: 1.5;">
-                Страница Keden будет обновлена<br>в течение пары секунд...
-            </div>
-        `;
-    }
-
-    if (timer) {
-        timer.style.animation = 'none';
-        timer.style.color = '#4ade80';
-        timer.style.borderColor = '#4ade80';
-        const timerVal = document.getElementById('aiTimerValue');
-        if (timerVal) timerVal.innerText = finalTime || 'Готово';
-    }
-
-    if (container) {
-        container.style.background = 'linear-gradient(135deg, rgba(74,222,128,0.4), rgba(34,197,94,0.4))';
-    }
-
-    // Блокируем кнопку подтверждения окончательно, чтобы не нажали во время релоада
-    const confirmBtn = document.getElementById('confirmFillBtn');
-    if (confirmBtn) {
-        confirmBtn.disabled = true;
-        confirmBtn.innerHTML = '✨ Заполнено успешно';
-        confirmBtn.style.background = 'var(--success)';
-        confirmBtn.style.boxShadow = '0 0 20px var(--success-glow)';
-    }
-
-    // Небольшой звуковой эффект или вибрация (опционально, но здесь просто визуально)
-    setTimeout(() => {
-        showLoading(false);
-    }, 2500);
-}
-
-function startTimer(forcedStartTime = null) {
-    if (_timerInterval) {
-        // If already running but we have a forced start time, update it
-        if (forcedStartTime) _timerStartTime = forcedStartTime;
-        return;
-    }
-    _timerStartTime = forcedStartTime || Date.now();
-    _timerInterval = setInterval(updateTimerUI, 100);
-}
-
-function stopTimer() {
-    let finalTime = '00:00';
-    if (_timerInterval) {
-        const el = document.getElementById('aiTimerValue');
-        if (el) finalTime = el.innerText;
-        clearInterval(_timerInterval);
-        _timerInterval = null;
-    }
-    return finalTime;
-}
-
-function updateTimerUI() {
-    const el = document.getElementById('aiTimerValue');
-    if (!el) return;
-
-    const diff = (Date.now() - _timerStartTime) / 1000;
-    const minutes = Math.floor(diff / 60);
-    const seconds = Math.floor(diff % 60);
-    const ms = Math.floor((diff % 1) * 10);
-
-    const timeStr = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${ms}`;
-    el.innerText = timeStr;
-}
-
-window.appExtensionFiles = [];
-
-function handleFiles(newFiles) {
-    window.appExtensionFiles = window.appExtensionFiles.concat(newFiles);
-    renderFileList();
-}
-
-function showError(msg) {
-    const previewContent = document.getElementById('previewContent');
-    const container = document.getElementById('mainContainer');
-    const previewArea = document.getElementById('previewArea');
-
-    if (previewContent && container) {
-        // Ensure container is expanded and preview area is visible to show error
-        container.classList.add('expanded');
-        if (window.innerWidth <= 860) {
-            document.body.style.width = '800px';
-        } else {
-            document.body.style.width = '100vw';
-        }
-        if (previewArea) previewArea.style.display = 'block';
-
-        previewContent.innerHTML = `
-            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 300px; color: #ef4444; text-align: center; padding: 20px;">
-                <div style="font-size: 40px; margin-bottom: 16px;">⚠️</div>
-                <div style="font-size: 14px; font-weight: 500; margin-bottom: 8px;">Ошибка анализа</div>
-                <div style="font-size: 12px; color: #94a3b8;">${msg || 'Неизвестная ошибка'}</div>
-                <button class="btn" id="retryAnalysisBtn" style="margin-top: 20px; width: auto; padding: 8px 16px;">ПОПРОБОВАТЬ СНОВА</button>
-            </div>
-        `;
-        // Attach listener after rendering
-        setTimeout(() => {
-            const retryBtn = document.getElementById('retryAnalysisBtn');
-            if (retryBtn) {
-                retryBtn.onclick = () => {
-                    const startBtn = document.getElementById('startBtn');
-                    if (startBtn) startBtn.click();
-                };
-            }
-        }, 0);
-    }
-    const fillBtn = document.getElementById('confirmFillBtn');
-    if (fillBtn) fillBtn.style.display = 'none';
-}
-
-function renderFileList() {
-    const fileList = document.getElementById('fileList');
-    if (!fileList) return;
-    fileList.innerHTML = '';
-
-    if (window.appExtensionFiles.length > 0) {
-        window.appExtensionFiles.forEach((file, index) => {
-            const item = document.createElement('div');
-            item.className = 'file-item';
-
-            const icon = document.createElement('div');
-            icon.className = 'file-icon';
-            icon.innerHTML = '📄';
-
-            const info = document.createElement('div');
-            info.className = 'file-info';
-
-            const name = document.createElement('div');
-            name.className = 'file-name';
-            name.innerText = file.name;
-            name.title = file.name;
-
-            const meta = document.createElement('div');
-            meta.className = 'file-meta';
-            meta.innerText = (file.size / 1024).toFixed(1) + ' KB';
-
-            info.appendChild(name);
-            info.appendChild(meta);
-
-            const removeBtn = document.createElement('button');
-            removeBtn.className = 'file-remove';
-            removeBtn.innerHTML = '&times;';
-            removeBtn.title = 'Удалить';
-            removeBtn.onclick = (e) => {
-                e.stopPropagation();
-                window.appExtensionFiles.splice(index, 1);
-                renderFileList();
-            };
-
-            item.appendChild(icon);
-            item.appendChild(info);
-            item.appendChild(removeBtn);
-            fileList.appendChild(item);
-        });
-        document.getElementById('statusMessage').style.display = 'block';
-        document.getElementById('statusMessage').innerText = `Готово к анализу: ${window.appExtensionFiles.length} файла(ов)`;
-    } else {
-        document.getElementById('statusMessage').style.display = 'none';
-    }
-}
-
-// Drag and drop logic
-const dropZone = document.getElementById('dropZone');
-const fileInput = document.getElementById('fileInput');
-
-if (dropZone && fileInput) {
-    dropZone.onclick = () => fileInput.click();
-
-    dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.style.borderColor = '#3b82f6';
-        dropZone.style.background = 'rgba(59, 130, 246, 0.05)';
-    });
-
-    dropZone.addEventListener('dragleave', () => {
-        dropZone.style.borderColor = 'rgba(255, 255, 255, 0.1)';
-        dropZone.style.background = 'transparent';
-    });
-
-    dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dropZone.style.borderColor = 'rgba(255, 255, 255, 0.1)';
-        dropZone.style.background = 'transparent';
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            handleFiles(Array.from(files));
-        }
-    });
-
-    fileInput.onchange = (e) => {
-        if (e.target.files.length > 0) {
-            handleFiles(Array.from(e.target.files));
-        }
-        // Сбрасываем input, чтобы можно было выбрать тот же файл еще раз, если его удалили из списка
-        e.target.value = '';
-    };
-}
-
-function initSmartDragAndDrop() {
-    const overlay = document.getElementById('smart-drop-overlay');
-    if (!overlay) return;
-
-    window.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        overlay.classList.add('visible');
-    });
-
-    overlay.addEventListener('dragleave', (e) => {
-        // Only hide if we actually leave the overlay area (not just child elements)
-        if (e.relatedTarget === null || !overlay.contains(e.relatedTarget)) {
-            overlay.classList.remove('visible');
-        }
-    });
-
-    overlay.addEventListener('drop', (e) => {
-        e.preventDefault();
-        overlay.classList.remove('visible');
-
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            handleFiles(Array.from(files));
-        }
-    });
-}
-
-// Initialize Smart Drag & Drop immediately
-initSmartDragAndDrop();
 
 let kedenDirectorySettings = {};
 
@@ -761,17 +337,42 @@ function renderPreview(aiResponse) {
             `<option value="${opt.val}" ${currentCode === opt.val ? 'selected' : ''}>${opt.label}</option>`
         ).join('');
 
-        row.innerHTML = `
-            <div style="font-size: 12px; font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${doc.filename}">
-                ${doc.filename}
-            </div>
-            <select class="preview-input doc-type-select" style="padding: 6px 10px;">${optionsHtml}</select>
-            <input type="text" class="preview-input doc-num-input" value="${doc.number || ''}" placeholder="б/н" style="padding: 6px 10px;">
-            <input type="text" class="preview-input doc-date-input" value="${doc.date || ''}" data-validate="date" placeholder="ДД.ММ.ГГГГ" style="padding: 6px 10px;">
-            <button class="delete-doc-btn">×</button>
-        `;
+        const filenameDiv = document.createElement('div');
+        filenameDiv.style.cssText = 'font-size: 12px; font-weight: 600; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;';
+        filenameDiv.title = doc.filename || '';
+        filenameDiv.textContent = doc.filename || '';
 
-        row.querySelector('.delete-doc-btn').onclick = () => {
+        const typeSelect = document.createElement('select');
+        typeSelect.className = 'preview-input doc-type-select';
+        typeSelect.style.padding = '6px 10px';
+        typeSelect.innerHTML = optionsHtml; // optionsHtml is safe: only static labels + hardcoded values
+
+        const numInput = document.createElement('input');
+        numInput.type = 'text';
+        numInput.className = 'preview-input doc-num-input';
+        numInput.value = doc.number || '';
+        numInput.placeholder = 'б/н';
+        numInput.style.padding = '6px 10px';
+
+        const dateInput = document.createElement('input');
+        dateInput.type = 'text';
+        dateInput.className = 'preview-input doc-date-input';
+        dateInput.value = doc.date || '';
+        dateInput.dataset.validate = 'date';
+        dateInput.placeholder = 'ДД.ММ.ГГГГ';
+        dateInput.style.padding = '6px 10px';
+
+        const delBtn = document.createElement('button');
+        delBtn.className = 'delete-doc-btn';
+        delBtn.textContent = '×';
+
+        row.appendChild(filenameDiv);
+        row.appendChild(typeSelect);
+        row.appendChild(numInput);
+        row.appendChild(dateInput);
+        row.appendChild(delBtn);
+
+        delBtn.onclick = () => {
             row.style.opacity = '0';
             row.style.transform = 'translateX(20px)';
             setTimeout(() => row.remove(), 200);
@@ -1207,10 +808,20 @@ function renderValidationSummary(validation) {
     validation.errors.forEach(err => {
         const div = document.createElement('div');
         div.className = 'validation-card error';
-        div.innerHTML = `
-            <div class="validation-icon">❌</div>
-            <div class="validation-text"><strong>Ошибка:</strong> ${err.message}</div>
-        `;
+
+        const iconEl = document.createElement('div');
+        iconEl.className = 'validation-icon';
+        iconEl.textContent = '❌';
+
+        const textEl = document.createElement('div');
+        textEl.className = 'validation-text';
+        const strong = document.createElement('strong');
+        strong.textContent = 'Ошибка: ';
+        textEl.appendChild(strong);
+        textEl.appendChild(document.createTextNode(err.message));
+
+        div.appendChild(iconEl);
+        div.appendChild(textEl);
         list.appendChild(div);
     });
 
@@ -1219,13 +830,21 @@ function renderValidationSummary(validation) {
         const isSuccess = warn.severity === 'SUCCESS';
         div.className = `validation-card ${isSuccess ? 'success' : 'warning'}`;
 
-        const icon = isSuccess ? '✅' : '⚠️';
-        const label = isSuccess ? '' : '<strong>Внимание:</strong> ';
+        const iconEl = document.createElement('div');
+        iconEl.className = 'validation-icon';
+        iconEl.textContent = isSuccess ? '✅' : '⚠️';
 
-        div.innerHTML = `
-            <div class="validation-icon">${icon}</div>
-            <div class="validation-text">${label}${warn.message}</div>
-        `;
+        const textEl = document.createElement('div');
+        textEl.className = 'validation-text';
+        if (!isSuccess) {
+            const strong = document.createElement('strong');
+            strong.textContent = 'Внимание: ';
+            textEl.appendChild(strong);
+        }
+        textEl.appendChild(document.createTextNode(warn.message));
+
+        div.appendChild(iconEl);
+        div.appendChild(textEl);
         list.appendChild(div);
     });
 
@@ -1421,208 +1040,4 @@ function scrapePreviewData() {
 
     // Registry scraping moved to documents list above
     return newData;
-}
-
-// --- Tab Switching Logic ---
-document.addEventListener('DOMContentLoaded', () => {
-    document.querySelectorAll('.tab').forEach(tab => {
-        tab.addEventListener('click', () => {
-            // Remove active class from all tabs
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            // Hide all tab contents
-            document.querySelectorAll('.tab-content').forEach(c => c.style.display = 'none');
-
-            // Add active class to clicked tab
-            tab.classList.add('active');
-            // Show corresponding content
-            const tabId = tab.getAttribute('data-tab');
-            const targetContent = document.getElementById(tabId);
-            if (targetContent) {
-                targetContent.style.display = 'block';
-                targetContent.style.animation = 'fadeIn 0.3s ease-out';
-
-                // If switching to history tab, refresh list
-                if (tabId === 'historyTab') {
-                    renderHistory();
-                }
-            }
-        });
-    });
-
-    // --- Clear History ---
-    const clearHistoryBtn = document.getElementById('clearHistoryBtn');
-    if (clearHistoryBtn) {
-        clearHistoryBtn.addEventListener('click', () => {
-            if (confirm('Вы уверены, что хотите очистить всю историю?')) {
-                chrome.storage.local.set({ history: [] }, () => {
-                    renderHistory();
-                });
-            }
-        });
-    }
-
-    // --- Reset Functionality ---
-    const resetBtn = document.getElementById('resetBtn');
-    if (resetBtn) {
-        resetBtn.addEventListener('click', resetApp);
-    }
-});
-
-function resetApp() {
-    window.appExtensionFiles = [];
-    currentAIData = null;
-    renderFileList();
-
-    const container = document.getElementById('mainContainer');
-    if (container) container.classList.remove('expanded');
-
-    const previewContent = document.getElementById('previewContent');
-    if (previewContent) updatePreviewPlaceholder();
-
-    const statusMsg = document.getElementById('statusMessage');
-    if (statusMsg) {
-        statusMsg.innerText = '';
-        statusMsg.style.display = 'none';
-    }
-
-    // Reset layout for popup mode
-    if (window.innerWidth <= 860) {
-        document.body.style.width = '380px';
-    }
-    updateStepper(1); // Reset Stepper to Step 1
-}
-
-// Visual feedback for online status
-function updateOnlineStatus() {
-    const dot = document.getElementById('onlineDot');
-    if (dot) {
-        const isOnline = navigator.onLine;
-        dot.style.background = isOnline ? '#34C759' : '#FF3B30';
-        dot.style.boxShadow = isOnline ? '0 0 12px #34C759' : '0 0 12px #FF3B30';
-    }
-}
-
-window.addEventListener('online', updateOnlineStatus);
-window.addEventListener('offline', updateOnlineStatus);
-updateOnlineStatus();
-
-
-function renderHistory() {
-    const container = document.getElementById('historyListContainer');
-    if (!container) return;
-
-    chrome.storage.local.get(['history'], (data) => {
-        const history = data.history || [];
-        if (history.length === 0) {
-            container.innerHTML = `
-                <div style="text-align: center; padding: 40px 20px; color: var(--text-secondary);">
-                    <div style="font-size: 32px; margin-bottom: 12px; opacity: 0.3;">📂</div>
-                    <div style="font-size: 13px;">История пока пуста</div>
-                </div>
-            `;
-            return;
-        }
-
-        container.innerHTML = '';
-        history.forEach((item, index) => {
-            const date = new Date(item.timestamp).toLocaleString('ru-RU', {
-                day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit'
-            });
-
-            const res = item.result || {};
-            const merged = res.mergedData || res;
-            const vehicles = merged.vehicles || {};
-            const tractor = vehicles.tractorRegNumber || '';
-            const trailer = vehicles.trailerRegNumber || '';
-
-            let vehicleText = tractor ? `${tractor}${trailer ? ' / ' + trailer : ''}` : '';
-
-            // Fallback: If mergedData has no vehicle number, check if any document has a number that looks like a vehicle reg
-            if (!vehicleText && res.documents) {
-                // Documents that are likely to contain vehicle info: CMR (09014), TIR (09013), or files containing "рег", "тс", "номер"
-                const vDoc = res.documents.find(d =>
-                    d.type === '09013' || d.type === '09014' ||
-                    ['рег', 'тс', 'номер', 'авто'].some(k => d.filename?.toLowerCase().includes(k))
-                );
-                if (vDoc && vDoc.number) {
-                    vehicleText = vDoc.number;
-                }
-            }
-
-            if (!vehicleText) {
-                vehicleText = item.files[0] || 'Анализ';
-            }
-
-            const isVehicle = (vehicleText !== (item.files[0] || 'Анализ'));
-            const filesText = item.files.join(', ');
-
-            const card = document.createElement('div');
-            card.className = 'history-item';
-            card.innerHTML = `
-                <div class="history-item-header">
-                    <div style="display: flex; align-items: center; gap: 8px;">
-                        <span class="history-item-date">${date}</span>
-                    </div>
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <span class="history-item-duration">${item.duration || ''}</span>
-                        <button class="history-delete-btn" title="Удалить">
-                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                            </svg>
-                        </button>
-                    </div>
-                </div>
-                <div class="history-item-files" title="${filesText}">
-                    ${isVehicle ? '🚚 ' : '📄 '}${vehicleText}
-                </div>
-                <div class="history-item-meta">
-                    <div style="display: flex; align-items: center; gap: 4px;">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                            <polyline points="14 2 14 8 20 8"></polyline>
-                        </svg>
-                        ${item.files.length} док.
-                    </div>
-                    <span>•</span>
-                    <div style="display: flex; align-items: center; gap: 4px;">
-                         <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                            <path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"></path>
-                        </svg>
-                        ${item.result?.mergedData?.products?.length || 0} товаров
-                    </div>
-                </div>
-            `;
-
-            const deleteBtn = card.querySelector('.history-delete-btn');
-            if (deleteBtn) {
-                deleteBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    if (confirm('Удалить эту запись?')) {
-                        const newHistory = [...history];
-                        newHistory.splice(index, 1);
-                        chrome.storage.local.set({ history: newHistory }, () => {
-                            renderHistory();
-                        });
-                    }
-                });
-            }
-
-            card.addEventListener('click', () => {
-                // Switch to uploadTab (where preview is)
-                document.querySelector('.tab[data-tab="uploadTab"]').click();
-
-                // Load result into preview
-                currentAIData = item.result;
-                renderPreview(item.result);
-
-                // Expand container if not already
-                const mainContainer = document.getElementById('mainContainer');
-                if (mainContainer) mainContainer.classList.add('expanded');
-
-                setStatus(`Загружено из истории (${date})`);
-            });
-
-            container.appendChild(card);
-        });
-    });
 }

@@ -33,6 +33,7 @@
             "js": [
                 "content/admin_auth.js",
                 "content/dictionaries.js",
+                "content/token_utils.js",
                 "content/mappers.js",
                 "content/api.js",
                 "content/enrichment.js",

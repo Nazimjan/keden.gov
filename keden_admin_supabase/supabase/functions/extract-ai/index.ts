@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getBatchPrompt } from "./prompts.ts";
+import { getBatchPrompt, SYSTEM_PROMPT } from "./prompts.ts";
 import { mergeAgentResults } from "./merger.ts";
 
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
@@ -272,13 +272,16 @@ serve(async (req) => {
                         model: "google/gemini-3-flash-preview",
                         stream: true,
                         max_tokens: 8192,
-                        messages: [{
-                            role: "user",
-                            content: [
-                                { type: "text", text: promptStr },
-                                { type: "image_url", image_url: { url: `data:${fileType};base64,__BASE64_STREAM_CONTENT__` } }
-                            ]
-                        }]
+                        messages: [
+                            { role: "system", content: SYSTEM_PROMPT },
+                            {
+                                role: "user",
+                                content: [
+                                    { type: "text", text: promptStr },
+                                    { type: "image_url", image_url: { url: `data:${fileType};base64,__BASE64_STREAM_CONTENT__` } }
+                                ]
+                            }
+                        ]
                     };
 
                     const [jsonStart, jsonEnd] = JSON.stringify(bodyTemplate).split("__BASE64_STREAM_CONTENT__");
@@ -381,7 +384,7 @@ serve(async (req) => {
                 }
             }
 
-            const prompt = getBatchPrompt(originalFileNames || storagePaths) + "\nReturn ONLY valid JSON.";
+            const prompt = getBatchPrompt(originalFileNames || storagePaths);
             const models = ["google/gemini-3-flash-preview", "qwen/qwen3.5-plus-02-15", "google/gemini-2.0-flash-001"];
 
             let aiData;
@@ -397,7 +400,10 @@ serve(async (req) => {
                         },
                         body: JSON.stringify({
                             model: model,
-                            messages: [{ role: "user", content: [{ type: "text", text: prompt }, ...fileContents] }],
+                            messages: [
+                                { role: "system", content: SYSTEM_PROMPT },
+                                { role: "user", content: [{ type: "text", text: prompt }, ...fileContents] }
+                            ],
                             max_tokens: 16384,
                             response_format: { type: "json_object" }
                         })
