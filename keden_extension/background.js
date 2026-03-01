@@ -213,6 +213,8 @@ async function handleExtraction(documents, iin, fio, targetTabId) {
         const storagePaths = [];
         // Маппинг: индекс пути → оригинальное имя файла
         const originalFileNames = [];
+        // Для дедупликации: отслеживаем уже добавленные имена файлов
+        const seenFileNames = new Set();
 
         // 1. Загрузка файлов в Supabase Storage
         for (const doc of documents) {
@@ -240,8 +242,11 @@ async function handleExtraction(documents, iin, fio, targetTabId) {
 
                     const uploadedData = await uploadWithRetry(fileName, blobData, mimeType, doc.fileName);
                     storagePaths.push(uploadedData.path);
-                    // Запоминаем оригинальное имя в том же порядке
-                    originalFileNames.push(doc.fileName);
+                    // Дедупликация: добавляем имя только один раз (для PDF с несколькими страницами)
+                    if (!seenFileNames.has(doc.fileName)) {
+                        originalFileNames.push(doc.fileName);
+                        seenFileNames.add(doc.fileName);
+                    }
                 }
             }
         }
@@ -284,12 +289,16 @@ async function handleExtraction(documents, iin, fio, targetTabId) {
         const aiDocuments = resultData.documents || [];
 
         const finalResult = {
-            documents: documents.map((d, idx) => {
-                let aiDoc = aiDocuments[idx];
+            documents: documents.map((d) => {
+                // Сопоставляем ТОЛЬКО по имени файла (не по индексу!)
+                // 1. Точное совпадение
+                let aiDoc = aiDocuments.find(ad =>
+                    ad.filename && ad.filename.trim() === d.fileName.trim()
+                );
+                // 2. Fallback: нечёткое совпадение по includes
                 if (!aiDoc) {
                     aiDoc = aiDocuments.find(ad =>
                         ad.filename && (
-                            ad.filename === d.fileName ||
                             d.fileName.toLowerCase().includes(ad.filename.toLowerCase()) ||
                             ad.filename.toLowerCase().includes(d.fileName.toLowerCase())
                         )
