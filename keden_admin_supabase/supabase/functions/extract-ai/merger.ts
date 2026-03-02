@@ -20,6 +20,213 @@ function deepMergeCrossChecks(existing: any, incoming: any): any {
     return result;
 }
 
+/** Преобразует ключ crossChecks в читаемую метку. Поддерживает формат "тип:файл". */
+export function getDocLabel(key: string): string {
+    const labels: Record<string, string> = {
+        "invoice": "Инвойс",
+        "cmr": "CMR",
+        "ttn": "ТТН",
+        "transport_doc": "Транспортный док.",
+        "packing_list": "Упаков. лист",
+        "registry": "Реестр",
+        "technical_passport": "Техпаспорт",
+        "techpassport": "Техпаспорт",
+        "invoice_excel": "Excel Инвойс",
+        "invoice_total": "Сумма в инвойсе",
+        "total_weight": "Общий вес",
+        "total_packages": "Кол-во мест",
+        "consignee": "Получатель",
+        "consignor": "Отправитель",
+        "carrier": "Перевозчик",
+        "declarant": "Декларант",
+    };
+    const lowKey = key.toLowerCase();
+
+    // Поддержка составных ключей "тип:имя_файла"
+    if (lowKey.includes(":")) {
+        const colonIdx = lowKey.indexOf(":");
+        const typeKey = lowKey.substring(0, colonIdx);
+        const fileName = key.substring(colonIdx + 1); // оригинальный регистр имени файла
+        const typeLabel = labels[typeKey] || typeKey;
+        return `${typeLabel} (${fileName})`;
+    }
+
+    return labels[lowKey] || key;
+}
+
+/**
+ * Дополняет mentions контрагентов из crossChecks.names.
+ * Страховочный слой для batch-режима: если AI вернул один consignor/consignee,
+ * но в crossChecks.names указал разные имена из разных файлов — добавляем их в mentions.
+ */
+function enrichMentionsFromCrossChecks(
+    merged: any,
+    mentions: any,
+    role: "consignor" | "consignee",
+): void {
+    const namesObj = merged.validation.crossChecks?.names?.[role];
+    if (!namesObj) return;
+
+    const existingNorms = new Set(
+        mentions[role].map((m: any) =>
+            normalizeName(m.data.legal?.nameRu || m.data.nonResidentLegal?.nameRu || "")
+        ),
+    );
+
+    let enrichedCount = 0;
+    for (const [key, name] of Object.entries(namesObj)) {
+        if (typeof name !== "string" || name.length < 3) continue;
+        const norm = normalizeName(name);
+        if (existingNorms.has(norm)) continue;
+
+        mentions[role].push({
+            source: getDocLabel(key),
+            docType: key.split(":")[0]?.toUpperCase() || "OTHER",
+            data: {
+                present: true,
+                entityType: "NON_RESIDENT_LEGAL",
+                legal: { bin: "", nameRu: "" },
+                nonResidentLegal: { nameRu: name as string },
+                addresses: [],
+            },
+        });
+        existingNorms.add(norm);
+        enrichedCount++;
+    }
+    if (enrichedCount > 0) {
+        console.log(`[enrichMentions] Добавлено ${enrichedCount} записей ${role} из crossChecks.names`);
+    }
+}
+
+/**
+ * ТРЕТИЙ СЛОЙ ЗАЩИТЫ: после мержа контрагентов проводим повторный majority vote
+ * по crossChecks.names[role].
+ *
+ * В batch-режиме AI возвращает один consignor → mentions содержит 1 запись →
+ * validateAndMergeCounteragent принимает её без сравнения.
+ * НО в crossChecks.names AI (если промпт выполнен) указал имена из КАЖДОГО документа.
+ *
+ * Алгоритм:
+ * 1. Считаем, сколько документов в crossChecks.names поддерживают финальное имя.
+ * 2. Считаем, сколько поддерживают альтернативные имена.
+ * 3. Если альтернативная группа БОЛЬШЕ — заменяем победителя и пишем ошибку о коррекции.
+ * 4. Если просто есть расхождение (меньшинство) — только репортируем конфликт.
+ */
+function crossVerifyFinalCounteragents(
+    merged: any,
+    role: "consignor" | "consignee",
+): void {
+    const namesObj = merged.validation.crossChecks?.names?.[role];
+    if (!namesObj) return;
+
+    const finalData = merged.mergedData.counteragents[role];
+    if (!finalData?.present) return;
+
+    const finalName =
+        finalData.legal?.nameRu ||
+        finalData.nonResidentLegal?.nameRu ||
+        "";
+    if (!finalName) return;
+
+    const finalNorm = normalizeName(finalName);
+    const roleLabel = role === "consignor" ? "ОТПРАВИТЕЛЯ" : "ПОЛУЧАТЕЛЯ";
+
+    // Majority vote по crossChecks.names
+    const freq: Record<string, { normalized: string; original: string; docs: string[] }> = {};
+    for (const [key, name] of Object.entries(namesObj)) {
+        if (typeof name !== "string" || name.length < 3) continue;
+        const norm = normalizeName(name as string);
+        if (!norm) continue;
+        if (!freq[norm]) freq[norm] = { normalized: norm, original: name as string, docs: [] };
+        freq[norm].docs.push(key);
+    }
+
+    if (Object.keys(freq).length === 0) return;
+
+    // Сортируем по количеству голосов (от большего к меньшему)
+    const groups = Object.values(freq).sort((a, b) => b.docs.length - a.docs.length);
+    const topGroup = groups[0];
+
+    // Если все документы в crossChecks согласны — сравниваем с финальным именем
+    if (groups.length === 1) {
+        if (topGroup.normalized !== finalNorm) {
+            // Все crossChecks говорят одно имя, а mentions дал другое → исправляем
+            _correctCounterAgentName(merged, role, finalData, finalName, topGroup.original, "все документы crossChecks", roleLabel);
+        }
+        return;
+    }
+
+    // Победитель crossChecks vs финальное принятое имя
+    const topMatchesFinal = topGroup.normalized === finalNorm;
+
+    if (!topMatchesFinal) {
+        // Большинство crossChecks за другое имя → принятое имя НЕВЕРНО → исправляем
+        const supportCount = topGroup.docs.length;
+        const finalCount = freq[finalNorm]?.docs.length ?? 0;
+        const docLabels = topGroup.docs.map((d) => getDocLabel(d)).join(", ");
+        _correctCounterAgentName(
+            merged, role, finalData, finalName,
+            topGroup.original,
+            `${supportCount} из ${supportCount + finalCount} документов (${docLabels})`,
+            roleLabel,
+        );
+    }
+
+    // Репортируем конфликты меньшинства (не тот вариант, что победил)
+    const winner = topMatchesFinal ? topGroup : (freq[finalNorm] ?? topGroup);
+    for (const loser of groups) {
+        if (loser.normalized === winner.normalized) continue;
+        const sim = calculateSimilarity(winner.normalized, loser.normalized);
+        const loserDocs = loser.docs.map((d) => getDocLabel(d)).join(", ");
+
+        // Проверяем дублирование с compareNamesAllDocuments
+        const alreadyReported = merged.validation.errors.some((e: any) =>
+            e.message?.includes(loser.original) && e.message?.includes(winner.original),
+        );
+        if (alreadyReported) continue;
+
+        merged.validation.errors.push({
+            field: `${role}.name`,
+            message: sim > 0.8
+                ? `ОПЕЧАТКА У ${roleLabel}: «${loser.original}» (в ${loserDocs}) — принято «${winner.original}» (большинство документов).`
+                : `КОНФЛИКТ У ${roleLabel}: «${loser.original}» (в ${loserDocs}) — принято «${winner.original}» (большинство документов).`,
+            severity: "ERROR",
+        });
+    }
+}
+
+/**
+ * Исправляет имя контрагента в mergedData и записывает ошибку о коррекции.
+ * Вызывается из crossVerifyFinalCounteragents когда majority vote указывает на другого победителя.
+ */
+function _correctCounterAgentName(
+    merged: any,
+    role: string,
+    finalData: any,
+    wrongName: string,
+    correctName: string,
+    reason: string,
+    roleLabel: string,
+): void {
+    // Применяем исправление в mergedData
+    if (finalData.entityType === "LEGAL" && finalData.legal?.nameRu) {
+        finalData.legal.nameRu = correctName;
+    } else {
+        // NON_RESIDENT_LEGAL или любой другой тип
+        finalData.entityType = "NON_RESIDENT_LEGAL";
+        if (!finalData.nonResidentLegal) finalData.nonResidentLegal = {};
+        finalData.nonResidentLegal.nameRu = correctName;
+    }
+
+    console.log(`[crossVerify] ${roleLabel}: исправлено «${wrongName}» → «${correctName}» (${reason})`);
+
+    merged.validation.errors.push({
+        field: `${role}.name`,
+        message: `ИСПРАВЛЕНО У ${roleLabel}: «${wrongName}» заменено на «${correctName}» — ${reason} подтверждают правильное имя.`,
+        severity: "ERROR",
+    });
+}
+
 /**
  * Объединяет результаты всех файл-агентов в единый объект Keden PI.
  */
@@ -193,10 +400,19 @@ export function mergeAgentResults(agentResults: any[]) {
         merged.mergedData.products = mentions.productCandidates[0].products;
     }
 
-    // Мерж контрагентов
+    // Слой 2: дополняем mentions из crossChecks.names (страховка для batch-режима)
+    enrichMentionsFromCrossChecks(merged, mentions, "consignor");
+    enrichMentionsFromCrossChecks(merged, mentions, "consignee");
+
+    // Мерж контрагентов (majority vote по mentions)
     for (const role of ["consignor", "consignee", "carrier", "declarant"]) {
         validateAndMergeCounteragent(merged, role, mentions[role]);
     }
+
+    // Слой 3: верифицируем финальные имена против crossChecks.names
+    // Ловим конфликты, которые не попали в mentions (batch AI вернул одно имя)
+    crossVerifyFinalCounteragents(merged, "consignor");
+    crossVerifyFinalCounteragents(merged, "consignee");
 
     // Транспорт и водитель
     handleVehicles(merged, mentions.vehicles);
@@ -283,7 +499,7 @@ function compareNamesAllDocuments(
     for (const loser of groups.slice(1)) {
         const sim = calculateSimilarity(winner.normalized, loser.normalized);
         const isTypo = sim > 0.8;
-        const loserDocs = loser.docs.join(", ");
+        const loserDocs = loser.docs.map((d) => getDocLabel(d)).join(", ");
         merged.validation.errors.push({
             message: isTypo
                 ? `ОПЕЧАТКА У ${roleLabel.toUpperCase()}: «${loser.original}» (в ${loserDocs}) — принято «${winner.original}» (большинство документов).`
@@ -296,29 +512,6 @@ function compareNamesAllDocuments(
 function runProgrammaticCrossChecks(merged: any) {
     const checks = merged.validation.crossChecks;
     const realSum = merged.validation.realTechnicalSum || 0;
-
-    const getDocLabel = (key: string) => {
-        const labels: any = {
-            "invoice": "Инвойс",
-            "cmr": "CMR",
-            "ttn": "ТТН",
-            "transport_doc": "Транспортный док.",
-            "packing_list": "Упаков. лист",
-            "registry": "Реестр",
-            "technical_passport": "Техпаспорт",
-            "techpassport": "Техпаспорт",
-            "invoice_excel": "Excel Инвойс",
-            "invoice_total": "Сумма в инвойсе",
-            "total_weight": "Общий вес",
-            "total_packages": "Кол-во мест",
-            "consignee": "Получатель",
-            "consignor": "Отправитель",
-            "carrier": "Перевозчик",
-            "declarant": "Декларант",
-        };
-        const lowKey = key.toLowerCase();
-        return labels[lowKey] || labels[key] || key;
-    };
 
     // 1. ФИНАНСЫ: сумма товаров vs invoiceTotal из AI
     const invoiceTotal = Number(checks?.finances?.invoiceTotal || 0);
