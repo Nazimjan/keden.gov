@@ -5,8 +5,9 @@
 
 (function () {
     // Avoid double initialization
-    if (window.kedenKeepAliveStarted) return;
-    window.kedenKeepAliveStarted = true;
+    window.Keden = window.Keden || {};
+    if (window.Keden.keepAliveStarted) return;
+    window.Keden.keepAliveStarted = true;
 
     console.log("[Keden Keep-Alive] Module active (Session auto-refresh)");
 

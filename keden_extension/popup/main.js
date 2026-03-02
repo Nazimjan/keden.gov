@@ -9,7 +9,8 @@ const supabaseClient = window.supabase.createClient(SUPABASE_CONFIG.URL, SUPABAS
 let currentUserInfo = null; // Will store { iin, fio } after auth check
 
 /**
- * Fetch user info directly from the Keden tab's localStorage via scripting API
+ * Fetch user info directly from the Keden tab's localStorage via scripting API.
+ * Token extraction logic is in popup/token_extractor.js (extractKedenTokenData).
  */
 async function getKedenUserInfo() {
     try {
@@ -19,90 +20,7 @@ async function getKedenUserInfo() {
 
         const results = await chrome.scripting.executeScript({
             target: { tabId: kedenTab.id },
-            func: async () => {
-                try {
-                    const authStorage = localStorage.getItem('auth-storage');
-                    let state = null;
-                    if (authStorage) {
-                        try {
-                            state = JSON.parse(authStorage).state;
-                        } catch (e) { }
-                    }
-
-                    let iin = '', fio = '', token = '';
-
-                    if (state) {
-                        if (state.token) {
-                            token = typeof state.token === 'string' ? state.token : (state.token.access_token || state.token.id_token || '');
-                        }
-                        if (!token && state.user && state.user.token) {
-                            token = state.user.token;
-                        }
-                        if (!token && state.userAccountData && state.userAccountData.token) {
-                            token = state.userAccountData.token;
-                        }
-                    }
-
-                    if (!token) {
-                        token = localStorage.getItem('token') ||
-                            localStorage.getItem('access_token') ||
-                            sessionStorage.getItem('token') ||
-                            sessionStorage.getItem('access_token');
-                    }
-
-                    if (token) {
-                        token = token.replace(/^"|"$/g, '');
-                    }
-
-                    if (token && token.includes('.')) {
-                        try {
-                            const parts = token.split('.');
-                            if (parts.length === 3) {
-                                const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-                                const jsonPayload = decodeURIComponent(atob(base64).split('').map(function (c) {
-                                    return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-                                }).join(''));
-                                const payload = JSON.parse(jsonPayload);
-                                iin = payload.iin || payload.preferred_username || payload.sub || '';
-                                fio = payload.fullName || payload.name || payload.given_name || '';
-                            }
-                        } catch (e) { }
-                    }
-
-                    if (state) {
-                        if (state.user) {
-                            iin = iin || state.user.iin || state.user.username || '';
-                            fio = fio || state.user.fullName || '';
-                        }
-                        if (state.userAccountData) {
-                            iin = iin || state.userAccountData.iin || '';
-                            const ud = state.userAccountData;
-                            fio = fio || [ud.lastName, ud.firstName, ud.middleName].filter(Boolean).join(' ');
-                        }
-                    }
-
-                    // Method 3: Fetch profile directly using the token to get actual FIO
-                    if (token) {
-                        try {
-                            const res = await fetch('https://keden.kgd.gov.kz/api/v1/auth/user-profile', {
-                                headers: { 'Authorization': `Bearer ${token}` }
-                            });
-                            if (res.ok) {
-                                const data = await res.json();
-                                if (data.iin) iin = data.iin;
-                                if (data.lastName || data.firstName) {
-                                    fio = [data.lastName, data.firstName, data.middleName].filter(Boolean).join(' ');
-                                }
-                            }
-                        } catch (e) {
-                            console.warn('[Admin Auth] Profile fetch failed:', e);
-                        }
-                    }
-
-                    if (!iin && !token) return null;
-                    return { iin: iin || 'unknown', fio: fio || 'Пользователь', token: token };
-                } catch (e) { return { error: e.message }; }
-            }
+            func: extractKedenTokenData
         });
 
         return results && results[0] && results[0].result ? results[0].result : null;
@@ -344,7 +262,7 @@ function handleStateUpdate(state) {
     } else if (state.status === 'IDLE') {
         showLoading(false);
         // Do not clear status if we have files selected
-        if (!window.appExtensionFiles || window.appExtensionFiles.length === 0) {
+        if (!window.Keden.appExtensionFiles || window.Keden.appExtensionFiles.length === 0) {
             setStatus('');
         }
     }
@@ -389,7 +307,7 @@ document.getElementById('resetBtn').onclick = () => {
     chrome.runtime.sendMessage({ action: 'RESET_STATE' });
     // Останавливаем polling если был запущен
     if (_pollingTimer) { clearInterval(_pollingTimer); _pollingTimer = null; }
-    window.appExtensionFiles = [];
+    window.Keden.appExtensionFiles = [];
     if (typeof renderFileList === 'function') renderFileList();
     if (typeof setStatus === 'function') setStatus('');
     if (typeof showLoading === 'function') showLoading(false);
@@ -417,7 +335,7 @@ if (openTabBtn) {
 
 document.getElementById('startBtn').onclick = async () => {
     logButtonClick('startBtn');
-    const files = window.appExtensionFiles || [];
+    const files = window.Keden.appExtensionFiles || [];
 
     if (files.length === 0) {
         showToast('Пожалуйста, выберите хотя бы один файл', 'error');

@@ -324,7 +324,7 @@ function showError(msg) {
 }
 
 function resetApp() {
-    window.appExtensionFiles = [];
+    window.Keden.appExtensionFiles = [];
     currentAIData = null;
     renderFileList();
 

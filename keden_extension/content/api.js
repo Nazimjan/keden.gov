@@ -2,6 +2,35 @@ const API_HOST = window.location.origin;
 const PI_API = `${API_HOST}/api/v1/pideclaration`;
 const COUNTERAGENT_API = `${PI_API}/counteragent`;
 
+/**
+ * Tries a sequence of API endpoints, returning the first successful result.
+ * @param {Array<{url: string, headers: object, transform: function, label: string, rawText?: boolean}>} attempts
+ * @param {string} logPrefix
+ * @returns {Promise<any|null>}
+ */
+async function tryFallbackSearch(attempts, logPrefix) {
+    for (const { url, headers, transform, label, rawText } of attempts) {
+        try {
+            console.log(`[API] ${logPrefix}: trying ${label}`);
+            const resp = await fetch(url, { headers });
+            if (!resp.ok) continue;
+            if (rawText) {
+                const text = await resp.text();
+                if (!text || !text.trim()) continue;
+                const result = transform(JSON.parse(text));
+                if (result) return result;
+            } else {
+                const data = await resp.json();
+                const result = transform(data);
+                if (result) return result;
+            }
+        } catch (e) {
+            console.error(`[API] ${logPrefix}: ${label} failed:`, e);
+        }
+    }
+    return null;
+}
+
 // Прокси для запросов из Popup (чтобы использовать авторизацию страницы)
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.type === 'proxy_tnved') {
@@ -199,85 +228,47 @@ async function fetchCountries(headers) {
 }
 
 async function fetchCustomsByCode(code, headers) {
-    console.log(`[API] Fetching customs by code: ${code}`);
-    // Try by-code first (although it often fails with 404)
-    let url = `${API_HOST}/api/v1/auth/customs/by-code/${code}`;
-    try {
-        let resp = await fetch(url, { headers });
-        if (resp.ok) {
-            const text = await resp.text();
-            if (text && text.trim() !== "") {
-                console.log(`[API] Found customs via by-code: ${code}`);
-                return JSON.parse(text);
-            }
-        }
-    } catch (e) { console.error("[API] Error in by-code fetch:", e); }
+    const matchCode = (e) => e.code === code || e.fullCode === code;
 
-    // Fallback 1: specialized customs-post handbook (common in PI declarations)
-    url = `${API_HOST}/api/v1/handbook/customs-post?kzOnly=true`;
-    try {
-        console.log(`[API] Trying customs-post handbook search for ${code}`);
-        const resp = await fetch(url, { headers });
-        if (resp.ok) {
-            const entries = await resp.json();
-            const found = entries.find(e => e.code === code || e.fullCode === code || e.fullCode === `398${code}`);
-            if (found) {
-                console.log(`[API] Found customs in customs-post handbook: ${code}`);
-                return found;
-            }
-        }
-    } catch (e) { console.error(`[API] Error in customs-post fallback:`, e); }
+    const result = await tryFallbackSearch([
+        {
+            url: `${API_HOST}/api/v1/auth/customs/by-code/${code}`,
+            headers, rawText: true,
+            transform: (data) => data,
+            label: `by-code/${code}`
+        },
+        {
+            url: `${API_HOST}/api/v1/handbook/customs-post?kzOnly=true`,
+            headers,
+            transform: (entries) => entries.find(e => matchCode(e) || e.fullCode === `398${code}`) || null,
+            label: 'customs-post handbook'
+        },
+        ...['customs_post_classifier', 'customs_classifier'].map(c => ({
+            url: `${API_HOST}/api/v1/handbook/entries/search/${c}?query=${code}&pageSize=100`,
+            headers,
+            transform: (entries) => entries.find(matchCode) || null,
+            label: c
+        }))
+    ], `Customs ${code}`);
 
-    // Fallback 2: general classifiers
-    const classifiers = ['customs_post_classifier', 'customs_classifier'];
-    for (const classifier of classifiers) {
-        url = `${API_HOST}/api/v1/handbook/entries/search/${classifier}?query=${code}&pageSize=100`;
-        try {
-            console.log(`[API] Trying fallback search in ${classifier} for ${code}`);
-            const resp = await fetch(url, { headers });
-            if (resp.ok) {
-                const entries = await resp.json();
-                const found = entries.find(e => e.code === code || e.fullCode === code);
-                if (found) {
-                    console.log(`[API] Found customs in ${classifier}: ${code}`);
-                    return found;
-                }
-            }
-        } catch (e) { console.error(`[API] Error in ${classifier} fallback:`, e); }
-    }
-
-    console.warn(`[API] Customs not found for code: ${code}`);
-    return null;
+    if (!result) console.warn(`[API] Customs not found for code: ${code}`);
+    return result;
 }
 
 async function fetchTransportModeByCode(code, headers) {
-    console.log(`[API] Fetching transport mode by code: ${code}`);
-    // We try two different classifiers: one for "31", "30" (border) and one for "Auto", "AIR" (root)
-    const classifiers = [
+    const attempts = [
         'transport_and_goods_transportation_types_classifier',
         'pi_vehicle_type_classifier'
-    ];
+    ].map(c => ({
+        url: `${API_HOST}/api/v1/handbook/entries/search/${c}?pageSize=1000`,
+        headers,
+        transform: (entries) => entries.find(e => e.code === code) || null,
+        label: c
+    }));
 
-    for (const classifier of classifiers) {
-        const url = `${API_HOST}/api/v1/handbook/entries/search/${classifier}?pageSize=1000`;
-        try {
-            console.log(`[API] Trying transport classifier: ${classifier}`);
-            const resp = await fetch(url, { headers });
-            if (resp.ok) {
-                const entries = await resp.json();
-                const found = entries.find(e => e.code === code);
-                if (found) {
-                    console.log(`[API] Found transport mode in ${classifier}: ${code}`);
-                    return found;
-                }
-            }
-        } catch (e) {
-            console.error(`[API] Error fetching from ${classifier}:`, e);
-        }
-    }
-
-    console.warn(`[API] Transport mode not found for code: ${code}`);
-    return null;
+    const result = await tryFallbackSearch(attempts, `Transport ${code}`);
+    if (!result) console.warn(`[API] Transport mode not found for code: ${code}`);
+    return result;
 }
 
 async function postDocument(consignmentId, payload, headers) {

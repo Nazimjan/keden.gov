@@ -133,7 +133,8 @@ function findCountryByCode(code) {
     return country || null;
 }
 
-// Attach to window for global access
-window.getCountries = getCountries;
-window.findCountryByCode = findCountryByCode;
-window.getFallbackCountries = () => FALLBACK_COUNTRIES;
+// Attach to window.Keden namespace for global access
+window.Keden = window.Keden || {};
+window.Keden.getCountries = getCountries;
+window.Keden.findCountryByCode = findCountryByCode;
+window.Keden.getFallbackCountries = () => FALLBACK_COUNTRIES;

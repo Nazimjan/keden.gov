@@ -1,10 +1,11 @@
 // KEDEN Extension - UI Files (файлы и drag-and-drop)
 // Зависит от: ui_core.js (setStatus, showToast)
 
-window.appExtensionFiles = [];
+window.Keden = window.Keden || {};
+window.Keden.appExtensionFiles = [];
 
 function handleFiles(newFiles) {
-    window.appExtensionFiles = window.appExtensionFiles.concat(newFiles);
+    window.Keden.appExtensionFiles = window.Keden.appExtensionFiles.concat(newFiles);
     renderFileList();
 }
 
@@ -13,8 +14,8 @@ function renderFileList() {
     if (!fileList) return;
     fileList.innerHTML = '';
 
-    if (window.appExtensionFiles.length > 0) {
-        window.appExtensionFiles.forEach((file, index) => {
+    if (window.Keden.appExtensionFiles.length > 0) {
+        window.Keden.appExtensionFiles.forEach((file, index) => {
             const item = document.createElement('div');
             item.className = 'file-item';
 
@@ -40,7 +41,7 @@ function renderFileList() {
             removeBtn.className = 'file-remove';
             removeBtn.innerHTML = '&times;';
             removeBtn.onclick = () => {
-                window.appExtensionFiles.splice(index, 1);
+                window.Keden.appExtensionFiles.splice(index, 1);
                 renderFileList();
             };
 
@@ -50,7 +51,7 @@ function renderFileList() {
             fileList.appendChild(item);
         });
         document.getElementById('statusMessage').style.display = 'block';
-        document.getElementById('statusMessage').innerText = `Готово к анализу: ${window.appExtensionFiles.length} файла(ов)`;
+        document.getElementById('statusMessage').innerText = `Готово к анализу: ${window.Keden.appExtensionFiles.length} файла(ов)`;
     } else {
         document.getElementById('statusMessage').style.display = 'none';
     }

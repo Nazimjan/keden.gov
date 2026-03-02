@@ -86,7 +86,7 @@ async function fillCounteragents(params) {
     const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` };
 
     // Инициализация справочника стран (диномическая загрузка с кэшем)
-    await window.getCountries(headers);
+    await window.Keden.getCountries(headers);
 
     // Normalize params in case it contains mergedData (sent directly from background)
     if (params && params.mergedData) {

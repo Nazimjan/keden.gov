@@ -25,7 +25,7 @@ function normalizeEntityType(entityType, name = "") {
 }
 
 function getCountryByCode(code) {
-    const country = window.findCountryByCode(code);
+    const country = window.Keden.findCountryByCode(code);
     if (!country) {
         console.warn(`[Mappers] Unknown country code: ${code}, using KZ as fallback`);
         return { id: 113, letterCodeShort: "KZ", shortNameRu: "КАЗАХСТАН" };
@@ -199,7 +199,7 @@ const VEHICLE_KIND = { "id": 29, "code": "31", "ru": "Состав трансп�
 
 function mapCountryCode(code) {
     if (!code) return null;
-    return window.findCountryByCode(code.toUpperCase());
+    return window.Keden.findCountryByCode(code.toUpperCase());
 }
 
 function buildVehiclePayload(vehiclesData) {

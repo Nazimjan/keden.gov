@@ -37,7 +37,7 @@ async function processCounteragentEnrichment(source, headers) {
             if (kedenInfo.addresses && kedenInfo.addresses.length > 0) {
                 source.addresses = kedenInfo.addresses.map(a => ({
                     addressType: a.addressType || { id: 2014, code: "1", ru: "Адрес регистрации" },
-                    country: a.country || window.findCountryByCode("KZ"),
+                    country: a.country || window.Keden.findCountryByCode("KZ"),
                     region: a.region,
                     city: a.city,
                     district: a.district,
@@ -61,7 +61,7 @@ function parseUchetAddressSimple(addrStr) {
     const parts = addrStr.split(',').map(p => p.trim());
     const res = {
         addressType: { id: 2014, code: "1", ru: "Адрес регистрации" },
-        country: window.findCountryByCode("KZ")
+        country: window.Keden.findCountryByCode("KZ")
     };
 
     parts.forEach(part => {
