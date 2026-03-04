@@ -247,7 +247,7 @@ async function handleExtraction(documents, iin, fio, targetTabId) {
             }
         }
 
-        await updateState({ progressMessage: 'ИИ анализирует документы...' });
+        await updateState({ progressMessage: 'ИИ анализирует документы...', extractionStartTime: Date.now() });
 
         // 2. Вызов Edge Function — передаём originalFileNames чтобы ИИ мог вернуть их в документах
         const { data: resultData, error: funcError } = await supabaseClient.functions.invoke('extract-ai', {
