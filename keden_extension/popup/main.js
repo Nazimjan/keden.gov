@@ -121,9 +121,10 @@ function showAccessDenied(message) {
     titleEl.style.cssText = 'color:#f1f5f9;font-size:1.5rem;';
     titleEl.textContent = 'Доступ запрещён';
 
+    const parts = message.split('\n\nПричина: ');
     const msgEl = document.createElement('p');
     msgEl.style.cssText = 'color:#94a3b8;max-width:400px;line-height:1.6;';
-    msgEl.textContent = message;
+    msgEl.textContent = parts[0];
 
     const hintEl = document.createElement('p');
     hintEl.style.cssText = 'color:#64748b;font-size:0.8rem;margin-top:20px;';
@@ -132,6 +133,14 @@ function showAccessDenied(message) {
     overlay.appendChild(iconEl);
     overlay.appendChild(titleEl);
     overlay.appendChild(msgEl);
+
+    if (parts[1]) {
+        const reasonEl = document.createElement('p');
+        reasonEl.style.cssText = 'color:#4ade80;max-width:400px;line-height:1.6;font-weight:600;';
+        reasonEl.textContent = 'Причина: ' + parts[1];
+        overlay.appendChild(reasonEl);
+    }
+
     overlay.appendChild(hintEl);
     document.body.appendChild(overlay);
 }
