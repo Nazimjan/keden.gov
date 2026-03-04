@@ -57,6 +57,7 @@
             // Using a more standard endpoint that should be available to any logged-in user
             const response = await fetch('/api/v1/handbook/entries/search/customs_post_classifier?pageSize=1', {
                 method: 'GET',
+                credentials: 'include',
                 headers: headers
             });
 
