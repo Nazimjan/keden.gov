@@ -14,6 +14,41 @@ chrome.action.onClicked.addListener(() => {
     chrome.tabs.create({ url: chrome.runtime.getURL('popup.html') });
 });
 
+// =====================================================
+// ПРОВЕРКА ОБНОВЛЕНИЙ
+// =====================================================
+const UPDATE_CHECK_URL = 'https://raw.githubusercontent.com/Nazimjan/keden.gov/master/keden_extension/manifest.json';
+const UPDATE_ALARM = 'keden_update_check';
+
+async function checkForUpdates() {
+    try {
+        const resp = await fetch(UPDATE_CHECK_URL, { cache: 'no-store' });
+        if (!resp.ok) return;
+        const remote = await resp.json();
+        const current = chrome.runtime.getManifest().version;
+        if (remote.version && remote.version !== current) {
+            chrome.notifications.create('keden_update', {
+                type: 'basic',
+                iconUrl: 'icon.png',
+                title: 'Keden Assistant — Доступно обновление',
+                message: `Версия ${remote.version} доступна (у вас ${current}). Свяжитесь с технической поддержкой для обновления.`,
+                priority: 2
+            });
+        }
+    } catch (e) {
+        console.warn('[Keden] Ошибка проверки обновлений:', e.message);
+    }
+}
+
+// Проверяем при старте
+checkForUpdates();
+
+// Повторяем раз в 12 часов
+chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: 720 });
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm.name === UPDATE_ALARM) checkForUpdates();
+});
+
 // Состояние по умолчанию
 const INITIAL_STATE = {
     status: 'IDLE', // IDLE, PROCESSING, SUCCESS, ERROR

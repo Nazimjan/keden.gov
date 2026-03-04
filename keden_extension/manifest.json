@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "Keden Assistant",
-    "version": "1.0",
+    "version": "1.1",
     "description": "AI-powered PI declaration filler using Qwen 3.5",
     "permissions": [
         "storage",
@@ -9,12 +9,14 @@
         "alarms",
         "activeTab",
         "scripting",
-        "tabs"
+        "tabs",
+        "notifications"
     ],
     "host_permissions": [
         "https://keden.kgd.gov.kz/*",
         "https://pk.uchet.kz/*",
-        "https://*.supabase.co/*"
+        "https://*.supabase.co/*",
+        "https://raw.githubusercontent.com/*"
     ],
     "action": {
         "default_icon": "icon.png"
