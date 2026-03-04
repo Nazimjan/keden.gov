@@ -2,7 +2,7 @@
     "manifest_version": 3,
     "name": "Keden Assistant",
     "version": "1.1",
-    "description": "AI-powered PI declaration filler using Qwen 3.5",
+    "description": "Интеллектуальный помощник для автоматического заполнения таможенных деклараций на основе ИИ",
     "permissions": [
         "storage",
         "unlimitedStorage",
