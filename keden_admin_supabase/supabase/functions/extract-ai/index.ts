@@ -349,7 +349,8 @@ serve(async (req) => {
                 fio: user.fio,
                 credits: user.credits,
                 hasSubscription,
-                message: user.is_allowed ? "Доступ разрешен" : "Доступ заблокирован"
+                message: user.is_allowed ? "Доступ разрешен" : "Доступ заблокирован",
+                block_reason: user.is_allowed ? null : (user.block_reason || null)
             }), { headers: corsHeaders });
         }
 

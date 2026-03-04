@@ -70,7 +70,8 @@ async function checkAdminAuth() {
 
         // 3. Проверяем статус доступа существующего или нового пользователя
         if (!user.is_allowed) {
-            return { allowed: false, message: 'Ваш доступ заблокирован администратором.', userInfo };
+            const reason = user.block_reason ? `\n\nПричина: ${user.block_reason}` : '';
+            return { allowed: false, message: `Ваш доступ заблокирован администратором.${reason}`, userInfo };
         }
 
         const now = new Date();
