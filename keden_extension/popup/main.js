@@ -472,23 +472,30 @@ if (confirmFillBtn) {
                 else throw new Error('Откройте вкладку Keden с ПИ декларацией');
             }
 
-            chrome.tabs.sendMessage(tab.id, { action: 'FILL_PI_DATA', data: scrapedData }, (response) => {
-                if (chrome.runtime.lastError) {
-                    if (typeof setStatus === 'function') setStatus('🔄 Перезагрузка страницы Keden...');
-                    chrome.tabs.reload(tab.id);
-                    showToast('Страница Keden начата перезагружаться. Нажмите кнопку еще раз через 2-3 секунды.', 'info');
-                    showLoading(false);
-                    return;
-                }
-                if (response && response.success) {
-                    const finalTime = stopTimer();
-                    showFillSuccess(finalTime);
-                    sendAdminLog('FILL_PI', `Заполнение ПИ декларации`);
-                } else {
-                    showToast('Ошибка: ' + (response ? response.error : 'Неизвестно'), 'error');
-                    showLoading(false);
-                }
-            });
+            if (typeof setStatus === 'function') setStatus('🔄 Перезагрузка страницы Keden...');
+            chrome.tabs.reload(tab.id);
+
+            const onUpdated = (tabId, changeInfo) => {
+                if (tabId !== tab.id || changeInfo.status !== 'complete') return;
+                chrome.tabs.onUpdated.removeListener(onUpdated);
+
+                chrome.tabs.sendMessage(tab.id, { action: 'FILL_PI_DATA', data: scrapedData }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        showToast('Ошибка связи со страницей: ' + chrome.runtime.lastError.message, 'error');
+                        showLoading(false);
+                        return;
+                    }
+                    if (response && response.success) {
+                        const finalTime = stopTimer();
+                        showFillSuccess(finalTime);
+                        sendAdminLog('FILL_PI', `Заполнение ПИ декларации`);
+                    } else {
+                        showToast('Ошибка: ' + (response ? response.error : 'Неизвестно'), 'error');
+                        showLoading(false);
+                    }
+                });
+            };
+            chrome.tabs.onUpdated.addListener(onUpdated);
         } catch (error) {
             console.error(error);
             showToast('Ошибка: ' + error.message, 'error');

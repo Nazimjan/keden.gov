@@ -59,72 +59,133 @@ function renderValidationSummary(validation) {
     if (!summaryEl) return;
 
     summaryEl.style.marginBottom = '24px';
-    summaryEl.innerHTML = `<h3>
+    summaryEl.innerHTML = '';
+
+    // Заголовок
+    const header = document.createElement('h3');
+    header.innerHTML = `
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent-primary)" stroke-width="2">
             <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
         </svg>
         Отчет о кросс-валидации
-    </h3>`;
+    `;
+    summaryEl.appendChild(header);
 
-    if (validation.errors.length === 0 && validation.warnings.length === 0) {
-        summaryEl.innerHTML += `
-            <div class="validation-card success">
-                <div class="validation-icon">✅</div>
-                <div class="validation-text">Данные во всех документах совпадают. Противоречий не обнаружено.</div>
-            </div>
-        `;
+    const errors   = validation.errors || [];
+    const successes = (validation.warnings || []).filter(w => w.severity === 'SUCCESS');
+    const warnings  = (validation.warnings || []).filter(w => w.severity !== 'SUCCESS');
+
+    if (errors.length === 0 && warnings.length === 0 && successes.length === 0) {
+        const ok = document.createElement('div');
+        ok.className = 'validation-card success';
+        ok.innerHTML = '<div class="validation-icon">✅</div>';
+        const t = document.createElement('div');
+        t.className = 'validation-text';
+        t.textContent = 'Данные во всех документах совпадают. Противоречий не обнаружено.';
+        ok.appendChild(t);
+        summaryEl.appendChild(ok);
         return;
     }
 
-    const list = document.createElement('div');
-    list.style.display = 'flex';
-    list.style.flexDirection = 'column';
-    list.style.gap = '8px';
+    // Создаёт сворачиваемую группу
+    function makeGroup(label, icon, colorVar, items, defaultOpen) {
+        if (items.length === 0) return null;
 
-    validation.errors.forEach(err => {
-        const div = document.createElement('div');
-        div.className = 'validation-card error';
+        const wrap = document.createElement('div');
+        wrap.style.cssText = 'margin-bottom: 6px; border-radius: 12px; overflow: hidden; border: 1px solid rgba(255,255,255,0.07);';
 
-        const iconEl = document.createElement('div');
-        iconEl.className = 'validation-icon';
-        iconEl.textContent = '❌';
+        // Шапка группы
+        const groupHeader = document.createElement('div');
+        groupHeader.style.cssText = `
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 10px 14px; cursor: pointer; user-select: none;
+            background: rgba(255,255,255,0.04);
+            transition: background 0.15s;
+        `;
+        groupHeader.onmouseenter = () => groupHeader.style.background = 'rgba(255,255,255,0.08)';
+        groupHeader.onmouseleave = () => groupHeader.style.background = 'rgba(255,255,255,0.04)';
 
-        const textEl = document.createElement('div');
-        textEl.className = 'validation-text';
-        const strong = document.createElement('strong');
-        strong.textContent = 'Ошибка: ';
-        textEl.appendChild(strong);
-        textEl.appendChild(document.createTextNode(err.message));
+        const left = document.createElement('div');
+        left.style.cssText = 'display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px;';
 
-        div.appendChild(iconEl);
-        div.appendChild(textEl);
-        list.appendChild(div);
-    });
+        const iconEl = document.createElement('span');
+        iconEl.textContent = icon;
 
-    validation.warnings.forEach(warn => {
-        const div = document.createElement('div');
-        const isSuccess = warn.severity === 'SUCCESS';
-        div.className = `validation-card ${isSuccess ? 'success' : 'warning'}`;
+        const labelEl = document.createElement('span');
+        labelEl.style.color = colorVar;
+        labelEl.textContent = label;
 
-        const iconEl = document.createElement('div');
-        iconEl.className = 'validation-icon';
-        iconEl.textContent = isSuccess ? '✅' : '⚠️';
+        const badge = document.createElement('span');
+        badge.style.cssText = `
+            font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 20px;
+            background: ${colorVar}22; color: ${colorVar};
+        `;
+        badge.textContent = items.length;
 
-        const textEl = document.createElement('div');
-        textEl.className = 'validation-text';
-        if (!isSuccess) {
-            const strong = document.createElement('strong');
-            strong.textContent = 'Внимание: ';
-            textEl.appendChild(strong);
+        left.appendChild(iconEl);
+        left.appendChild(labelEl);
+        left.appendChild(badge);
+
+        const chevron = document.createElement('span');
+        chevron.style.cssText = `color: var(--text-muted); font-size: 11px; transition: transform 0.2s;`;
+        chevron.textContent = '▼';
+
+        groupHeader.appendChild(left);
+        groupHeader.appendChild(chevron);
+
+        // Тело группы
+        const body = document.createElement('div');
+        body.style.cssText = 'display: flex; flex-direction: column; gap: 4px; padding: 0 8px 8px 8px;';
+
+        items.forEach(item => {
+            const msg = item.message || String(item);
+            const card = document.createElement('div');
+            card.className = 'validation-card ' + (
+                item.severity === 'ERROR'   ? 'error' :
+                item.severity === 'SUCCESS' ? 'success' : 'warning'
+            );
+            card.style.margin = '0';
+
+            const cardIcon = document.createElement('div');
+            cardIcon.className = 'validation-icon';
+            cardIcon.textContent = icon;
+
+            const text = document.createElement('div');
+            text.className = 'validation-text';
+            text.textContent = msg;
+
+            card.appendChild(cardIcon);
+            card.appendChild(text);
+            body.appendChild(card);
+        });
+
+        // Сворачивание
+        if (!defaultOpen) {
+            body.style.display = 'none';
+            chevron.style.transform = 'rotate(-90deg)';
         }
-        textEl.appendChild(document.createTextNode(warn.message));
 
-        div.appendChild(iconEl);
-        div.appendChild(textEl);
-        list.appendChild(div);
-    });
+        groupHeader.onclick = () => {
+            const isOpen = body.style.display !== 'none';
+            body.style.display = isOpen ? 'none' : 'flex';
+            chevron.style.transform = isOpen ? 'rotate(-90deg)' : 'rotate(0deg)';
+        };
 
-    summaryEl.appendChild(list);
+        wrap.appendChild(groupHeader);
+        wrap.appendChild(body);
+        return wrap;
+    }
+
+    const hasErrors   = errors.length > 0;
+    const hasWarnings = warnings.length > 0;
+
+    const errGroup  = makeGroup('Критические ошибки', '❌', '#ef4444', errors,   true);
+    const warnGroup = makeGroup('Предупреждения',      '⚠️', '#f59e0b', warnings, hasErrors ? false : true);
+    const okGroup   = makeGroup('Подтверждено',        '✅', '#22c55e', successes, !hasErrors && !hasWarnings);
+
+    if (errGroup)  summaryEl.appendChild(errGroup);
+    if (warnGroup) summaryEl.appendChild(warnGroup);
+    if (okGroup)   summaryEl.appendChild(okGroup);
 }
 
 function highlightFieldsUI(validation) {

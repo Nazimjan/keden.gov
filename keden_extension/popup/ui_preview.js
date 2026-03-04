@@ -468,7 +468,11 @@ function renderPreview(aiResponse) {
 
         agents.forEach(agent => {
             if (agent.data && (agent.data.present !== false)) {
-                const bin = agent.id === 'filler' ? (agent.data.iin || '') : (agent.data.legal?.bin || agent.data.person?.iin || '');
+                const agentCountry = (agent.data.addresses?.[0]?.countryCode || '').toUpperCase();
+                const isNonResident = ['NON_RESIDENT_LEGAL', 'NON_RESIDENT_PERSON', 'NON_RESIDENT'].includes(agent.data.entityType)
+                    || (agentCountry && agentCountry !== 'KZ');
+                const rawBin = agent.id === 'filler' ? (agent.data.iin || '') : (isNonResident ? '' : (agent.data.legal?.bin || agent.data.person?.iin || ''));
+                const bin = String(rawBin).replace(/\D/g, '').length === 12 ? rawBin : '';
                 const name = agent.id === 'filler' ? (agent.data.lastName || '') : (agent.data.legal?.nameRu || agent.data.nonResidentLegal?.nameRu || agent.data.person?.lastName || '');
                 const addrObj = agent.data.addresses?.[0] || {};
                 let address = addrObj.fullAddress || '';
@@ -724,7 +728,11 @@ function scrapePreviewData() {
 
             if (binInput) {
                 const bin = binInput.value;
-                if (bin) {
+                const agentEntityType = newData.counteragents[id]?.entityType || '';
+                const agentAddrCountry = (newData.counteragents[id]?.addresses?.[0]?.countryCode || '').toUpperCase();
+                const agentIsNonResident = ['NON_RESIDENT_LEGAL', 'NON_RESIDENT_PERSON', 'NON_RESIDENT'].includes(agentEntityType)
+                    || (agentAddrCountry && agentAddrCountry !== 'KZ');
+                if (bin && !agentIsNonResident) {
                     if (!newData.counteragents[id].legal && !newData.counteragents[id].person && id !== 'consignor') {
                         newData.counteragents[id].legal = { bin: bin };
                         newData.counteragents[id].entityType = "LEGAL";

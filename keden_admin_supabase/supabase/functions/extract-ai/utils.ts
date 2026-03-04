@@ -11,7 +11,7 @@ export function normalizeName(name: string): string {
     const legalForms = [
         "LTD", "LIMITED", "LLC", "INC", "CORP", "CO", "COMPANY", "GMBH", "SARL",
         "ТОО", "АО", "ООО", "ИП", "ПК", "ГКП", "РГП", "КХ", "ФИЛИАЛ",
-        "PRIVATE", "PUBLIC", "INTERNATIONAL", "TRADING", "GROUP",
+        "PRIVATE", "PUBLIC", "INTERNATIONAL", "TRADING", "TRADE", "GROUP",
     ];
 
     // NOTE: \b does not work with Cyrillic characters in JS (only matches ASCII word chars).

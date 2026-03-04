@@ -55,10 +55,18 @@ function buildCounteragentPayload(source, extra) {
         }
     }
 
+    // Если адрес в стране != KZ, а entityType всё ещё LEGAL — исправляем на нерезидента
+    const addrCountry = (source.addresses?.[0]?.countryCode || '').toUpperCase();
+    if (entityType === 'LEGAL' && addrCountry && addrCountry !== 'KZ') {
+        entityType = 'NON_RESIDENT_LEGAL';
+    }
+
     if (entityType) payload.entityType = entityType;
 
     // Ключевой идентификатор для ПИ (БИН или ИИН) - TЗ п.2.1
-    const rawBin = source.legal?.bin || source.person?.iin || source.iin || source.xin || "";
+    // Нерезиденты не имеют КЗ БИН — не берём legal.bin для них
+    const agentIsNonResident = entityType && entityType.includes('NON_RESIDENT');
+    const rawBin = agentIsNonResident ? '' : (source.legal?.bin || source.person?.iin || source.iin || source.xin || "");
     if (rawBin) {
         payload.xin = rawBin.toString().replace(/\D/g, '');
     }
@@ -91,10 +99,10 @@ function buildCounteragentPayload(source, extra) {
                 const parts = mappedAddr.fullAddress.split(',').map(s => s.trim());
                 // Простая эвристика: последнее - дом/улица
                 if (parts.length >= 2) {
-                    mappedAddr.street = parts[parts.length - 2];
-                    mappedAddr.house = parts[parts.length - 1];
+                    mappedAddr.street = parts[parts.length - 2].substring(0, 100);
+                    mappedAddr.house = parts[parts.length - 1].substring(0, 50);
                 } else {
-                    mappedAddr.street = mappedAddr.fullAddress;
+                    mappedAddr.street = mappedAddr.fullAddress.substring(0, 100);
                 }
             }
 

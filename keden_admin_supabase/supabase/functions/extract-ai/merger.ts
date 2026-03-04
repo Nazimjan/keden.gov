@@ -1,6 +1,20 @@
 import { normalizeName, calculateSimilarity } from "./utils.ts";
 
 /**
+ * Типы документов, участвующие в сверке контрагентов (consignor/consignee).
+ * Договоры, доверенности и прочие вспомогательные документы — исключены.
+ */
+const COUNTERAGENT_RELEVANT_DOC_TYPES = new Set([
+    "INVOICE", "INVOICE_EXCEL", "TRANSPORT_DOC", "CMR", "TTN", "PACKING_LIST",
+]);
+
+/** Проверяет, что ключ crossChecks.names ("тип:файл") относится к релевантному типу документа. */
+function isRelevantCrossCheckKey(key: string): boolean {
+    const typePrefix = key.split(":")[0].toUpperCase().replace(/_/g, "_");
+    return COUNTERAGENT_RELEVANT_DOC_TYPES.has(typePrefix);
+}
+
+/**
  * Рекурсивный deep merge для объектов crossChecks.
  * Предотвращает потерю данных при shallow spread когда разные документы
  * дают одинаковые ключи верхнего уровня (weight, packages, names).
@@ -131,10 +145,11 @@ function crossVerifyFinalCounteragents(
     const finalNorm = normalizeName(finalName);
     const roleLabel = role === "consignor" ? "ОТПРАВИТЕЛЯ" : "ПОЛУЧАТЕЛЯ";
 
-    // Majority vote по crossChecks.names
+    // Majority vote по crossChecks.names (только релевантные типы документов)
     const freq: Record<string, { normalized: string; original: string; docs: string[] }> = {};
     for (const [key, name] of Object.entries(namesObj)) {
         if (typeof name !== "string" || name.length < 3) continue;
+        if (!isRelevantCrossCheckKey(key)) continue;
         const norm = normalizeName(name as string);
         if (!norm) continue;
         if (!freq[norm]) freq[norm] = { normalized: norm, original: name as string, docs: [] };
@@ -225,6 +240,106 @@ function _correctCounterAgentName(
         message: `ИСПРАВЛЕНО У ${roleLabel}: «${wrongName}» заменено на «${correctName}» — ${reason} подтверждают правильное имя.`,
         severity: "ERROR",
     });
+}
+
+/**
+ * Программно строит crossChecks из индивидуальных результатов агентов.
+ * Вызывается после сбора mentions, но перед runProgrammaticCrossChecks.
+ * Заполняет только ПУСТЫЕ ключи — не перезаписывает данные от AI.
+ */
+function buildProgrammaticCrossChecks(merged: any, mentions: any, agentResults: any[]): void {
+    const checks = merged.validation.crossChecks;
+
+    // 1. ВЕСТ из docTotals (weight per document)
+    if (mentions.docTotals.length > 1) {
+        if (!checks.weight) checks.weight = {};
+        for (const dt of mentions.docTotals) {
+            if (dt.weight <= 0) continue;
+            const docTypeLower = (dt.type || "other").toLowerCase();
+            const fileName = dt.source.match(/\((.+)\)$/)?.[1] || dt.source;
+            const key = `${docTypeLower}:${fileName}`;
+            if (!(key in checks.weight)) checks.weight[key] = dt.weight;
+        }
+    }
+
+    // 2. МЕСТА из docTotals (packages per document)
+    if (mentions.docTotals.length > 1) {
+        if (!checks.packages) checks.packages = {};
+        for (const dt of mentions.docTotals) {
+            if (dt.packages <= 0) continue;
+            const docTypeLower = (dt.type || "other").toLowerCase();
+            const fileName = dt.source.match(/\((.+)\)$/)?.[1] || dt.source;
+            const key = `${docTypeLower}:${fileName}`;
+            if (!(key in checks.packages)) checks.packages[key] = dt.packages;
+        }
+    }
+
+    // 3. ИМЕНА контрагентов из mentions
+    for (const role of ["consignor", "consignee"] as const) {
+        if (mentions[role].length === 0) continue;
+        if (!checks.names) checks.names = {};
+        if (!checks.names[role]) checks.names[role] = {};
+        for (const m of mentions[role]) {
+            const name: string =
+                m.data.legal?.nameRu ||
+                m.data.nonResidentLegal?.nameRu ||
+                "";
+            if (name.length < 3) continue;
+            const docTypeLower = (m.docType || "other").toLowerCase();
+            const fileName = m.source.match(/\((.+)\)$/)?.[1] || m.source;
+            const key = `${docTypeLower}:${fileName}`;
+            if (!(key in checks.names[role])) checks.names[role][key] = name;
+        }
+    }
+
+    // 4. ТРАНСПОРТ из mentions.vehicles
+    if (mentions.vehicles.length > 0) {
+        if (!checks.vehicles) checks.vehicles = {};
+        const tractors: Record<string, string> = {};
+        const trailers: Record<string, string> = {};
+        for (const m of mentions.vehicles) {
+            const v = m.data;
+            if (v.tractorRegNumber) tractors[m.docType] = v.tractorRegNumber;
+            if (v.trailerRegNumber) trailers[m.docType] = v.trailerRegNumber;
+        }
+        if (!checks.vehicles.tractor && (tractors["TRANSPORT_DOC"] || tractors["CMR"] || tractors["VEHICLE_DOC"])) {
+            checks.vehicles.tractor = {
+                transportDoc: tractors["TRANSPORT_DOC"] || tractors["CMR"] || "",
+                techPassport: tractors["VEHICLE_DOC"] || "",
+            };
+        }
+        if (!checks.vehicles.trailer && (trailers["TRANSPORT_DOC"] || trailers["CMR"] || trailers["VEHICLE_DOC"])) {
+            checks.vehicles.trailer = {
+                transportDoc: trailers["TRANSPORT_DOC"] || trailers["CMR"] || "",
+                techPassport: trailers["VEHICLE_DOC"] || "",
+            };
+        }
+    }
+
+    // 5. ФИНАНСЫ: invoiceTotal из результата INVOICE
+    if (!checks.finances?.invoiceTotal) {
+        const invoiceResult = agentResults.find(
+            (r: any) => r.document?.type === "INVOICE" || r.documents?.[0]?.type === "INVOICE",
+        );
+        const invoiceTotal = parseFloat(String(invoiceResult?.totalCost || 0));
+        if (invoiceTotal > 0) {
+            if (!checks.finances) checks.finances = {};
+            checks.finances.invoiceTotal = invoiceTotal;
+        }
+    }
+
+    // 6. ССЫЛКА НА ИНВОЙС из CMR (поле invoiceReference в per-file режиме)
+    if (!checks.invoiceRef) {
+        for (const r of agentResults) {
+            const docType = r.document?.type || r.documents?.[0]?.type || "";
+            const ref: string = r.invoiceReference || "";
+            if (docType === "TRANSPORT_DOC" && ref.length > 2) {
+                const fileName = r.filename || r.documents?.[0]?.filename || "cmr";
+                checks.invoiceRef = { [`transport_doc:${fileName}`]: ref };
+                break;
+            }
+        }
+    }
 }
 
 /**
@@ -323,9 +438,12 @@ export function mergeAgentResults(agentResults: any[]) {
             });
         }
 
-        // Собираем контрагентов
-        if (result.consignor?.present) mentions.consignor.push({ source: sourceLabel, docType, data: result.consignor });
-        if (result.consignee?.present) mentions.consignee.push({ source: sourceLabel, docType, data: result.consignee });
+        // Собираем контрагентов.
+        // consignor/consignee берём только из релевантных документов (инвойс, CMR, ТТН, реестр).
+        // Договоры экспедиции, доверенности и прочее — не участвуют в сверке.
+        const isRelevantForCounterAgent = COUNTERAGENT_RELEVANT_DOC_TYPES.has(docType);
+        if (result.consignor?.present && isRelevantForCounterAgent) mentions.consignor.push({ source: sourceLabel, docType, data: result.consignor });
+        if (result.consignee?.present && isRelevantForCounterAgent) mentions.consignee.push({ source: sourceLabel, docType, data: result.consignee });
         if (result.carrier?.present) mentions.carrier.push({ source: sourceLabel, docType, data: result.carrier });
         if (result.declarant?.present) mentions.declarant.push({ source: sourceLabel, docType, data: result.declarant });
 
@@ -414,6 +532,11 @@ export function mergeAgentResults(agentResults: any[]) {
     crossVerifyFinalCounteragents(merged, "consignor");
     crossVerifyFinalCounteragents(merged, "consignee");
 
+    // Программная сборка crossChecks из индивидуальных результатов агентов.
+    // Работает как в параллельном режиме (per-file), так и как страховка для batch.
+    // Заполняет только пустые ключи — не перезаписывает данные от AI.
+    buildProgrammaticCrossChecks(merged, mentions, agentResults);
+
     // Транспорт и водитель
     handleVehicles(merged, mentions.vehicles);
     handleDriver(merged, mentions.driver);
@@ -465,7 +588,7 @@ function compareNamesAllDocuments(
     if (!namesObj) return;
 
     const entries = Object.entries(namesObj)
-        .filter(([_, v]) => typeof v === "string" && (v as string).length > 2)
+        .filter(([key, v]) => typeof v === "string" && (v as string).length > 2 && isRelevantCrossCheckKey(key))
         .map(([doc, name]) => ({
             doc,
             original: name as string,

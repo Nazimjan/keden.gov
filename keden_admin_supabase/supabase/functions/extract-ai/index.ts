@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { getBatchPrompt, SYSTEM_PROMPT } from "./prompts.ts";
+import { getBatchPrompt, SYSTEM_PROMPT, PER_FILE_SYSTEM_PROMPT, getPerFilePrompt } from "./prompts.ts";
 import { mergeAgentResults } from "./merger.ts";
 
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
@@ -141,6 +141,125 @@ function safeParseJSON(text: string) {
     }
 }
 
+// ─── Параллельный режим: хелперы ─────────────────────────────────────────────
+
+/** Группирует storagePaths по originalFileName. Многостраничные PDF→несколько путей с одним именем. */
+function groupFilesByName(
+    storagePaths: string[],
+    originalFileNames: string[],
+): Map<string, { paths: string[]; originalName: string }> {
+    const groups = new Map<string, { paths: string[]; originalName: string }>();
+    for (let i = 0; i < storagePaths.length; i++) {
+        const name = originalFileNames?.[i] || storagePaths[i];
+        if (!groups.has(name)) groups.set(name, { paths: [], originalName: name });
+        groups.get(name)!.paths.push(storagePaths[i]);
+    }
+    return groups;
+}
+
+/** Семафор: ограничивает количество одновременных вызовов. */
+function createSemaphore(maxConcurrent: number) {
+    let running = 0;
+    const queue: (() => void)[] = [];
+    return async function <T>(fn: () => Promise<T>): Promise<T> {
+        if (running >= maxConcurrent) {
+            await new Promise<void>((resolve) => queue.push(resolve));
+        }
+        running++;
+        try {
+            return await fn();
+        } finally {
+            running--;
+            if (queue.length > 0) queue.shift()!();
+        }
+    };
+}
+
+/** Обрабатывает одну группу файлов (один логический документ) параллельным агентом. */
+async function processFileGroup(
+    supabase: any,
+    group: { paths: string[]; originalName: string },
+    models: string[],
+): Promise<{ result: any | null; error: string | null }> {
+    const fileContents: any[] = [];
+    for (const path of group.paths) {
+        try {
+            const { data, error } = await supabase.storage.from("documents").download(path);
+            if (error || !data) continue;
+            const buffer = await data.arrayBuffer();
+            if (data.type.startsWith("image/") || data.type === "application/pdf") {
+                const uint8 = new Uint8Array(buffer);
+                let binary = "";
+                const chunk_size = 16384;
+                for (let k = 0; k < uint8.length; k += chunk_size) {
+                    binary += String.fromCharCode(...uint8.subarray(k, k + chunk_size));
+                }
+                fileContents.push({ type: "image_url", image_url: { url: `data:${data.type};base64,${btoa(binary)}` } });
+            } else {
+                fileContents.push({
+                    type: "text",
+                    text: `--- Content of ${group.originalName} ---\n${new TextDecoder().decode(buffer)}`,
+                });
+            }
+        } catch (e) {
+            console.error(`[parallel] Error downloading ${path}:`, e);
+        }
+    }
+
+    if (fileContents.length === 0) {
+        return { result: null, error: `Не удалось загрузить: ${group.originalName}` };
+    }
+
+    const prompt = getPerFilePrompt(group.originalName);
+
+    for (const model of models) {
+        try {
+            console.log(`[parallel] ${group.originalName} → ${model}`);
+            const response = await fetch(OPENROUTER_URL, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://keden.kgd.gov.kz",
+                },
+                body: JSON.stringify({
+                    model,
+                    messages: [
+                        { role: "system", content: PER_FILE_SYSTEM_PROMPT },
+                        { role: "user", content: [{ type: "text", text: prompt }, ...fileContents] },
+                    ],
+                    max_tokens: 8192,
+                    response_format: { type: "json_object" },
+                }),
+            });
+
+            if (!response.ok) {
+                console.warn(`[parallel] ${model} → ${response.status} ${response.statusText}`);
+                continue;
+            }
+            const aiData = await response.json();
+            let content: string = aiData.choices?.[0]?.message?.content?.trim() || "";
+            if (!content) continue;
+            if (content.startsWith("```")) {
+                content = content.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+            }
+            const parsed = safeParseJSON(content);
+            // Гарантируем что filename проставлен
+            parsed.filename = group.originalName;
+            if (!parsed.document && parsed.documents?.[0]) {
+                parsed.document = parsed.documents[0];
+            }
+            return { result: parsed, error: null };
+        } catch (e: any) {
+            console.error(`[parallel] ${group.originalName} ${model} error:`, e.message);
+        }
+    }
+
+    return { result: null, error: `Все модели не смогли обработать: ${group.originalName}` };
+}
+
+// ─── Edge Function ────────────────────────────────────────────────────────────
+
 serve(async (req) => {
     const corsHeaders = {
         "Access-Control-Allow-Origin": "*",
@@ -278,7 +397,7 @@ serve(async (req) => {
 
                 try {
                     const bodyTemplate = {
-                        model: "google/gemini-3-flash-preview",
+                        model: "google/gemini-3.1-flash-lite-preview",
                         stream: true,
                         max_tokens: 8192,
                         messages: [
@@ -349,13 +468,63 @@ serve(async (req) => {
             });
         }
 
-        // Action: extract (Single Batch - All Files Together)
+        // Action: extract (Parallel per-file или Batch fallback)
         if (action === "extract" && jsonBody) {
-            const { storagePaths, originalFileNames } = jsonBody;
+            const { storagePaths, originalFileNames, parallelMode = true } = jsonBody;
             if (!storagePaths) throw new Error("Missing storagePaths");
 
             await checkAndDeductCredits();
 
+            // ── ПАРАЛЛЕЛЬНЫЙ РЕЖИМ (по умолчанию) ──────────────────────────────
+            if (parallelMode) {
+                const groups = groupFilesByName(storagePaths, originalFileNames);
+                const models = ["google/gemini-3.1-flash-lite-preview", "anthropic/claude-haiku-4.5"];
+                const sem = createSemaphore(8);
+
+                const promises = Array.from(groups.values()).map((group) =>
+                    sem(() => processFileGroup(supabase, group, models))
+                );
+
+                const settled = await Promise.allSettled(promises);
+
+                const agentResults: any[] = [];
+                const failedFiles: string[] = [];
+
+                for (const s of settled) {
+                    if (s.status === "fulfilled" && s.value.result) {
+                        agentResults.push(s.value.result);
+                    } else {
+                        const reason = s.status === "rejected"
+                            ? String(s.reason)
+                            : (s.value?.error || "unknown error");
+                        failedFiles.push(reason);
+                        console.error(`[parallel] Failed:`, reason);
+                    }
+                }
+
+                if (agentResults.length === 0) {
+                    throw new Error(`AI error: All file extractions failed.`);
+                }
+
+                const result = mergeAgentResults(agentResults);
+
+                for (const f of failedFiles) {
+                    result.validation.warnings.push({
+                        message: `Не удалось обработать файл: ${f}`,
+                        severity: "WARNING",
+                    });
+                }
+
+                await supabase.from("logs").insert({
+                    user_iin: iin,
+                    action_type: "AI_EXTRACT_PARALLEL",
+                    description: `Parallel: ${agentResults.length}/${groups.size} groups OK, ${failedFiles.length} failed`,
+                });
+
+                return new Response(JSON.stringify(result), { headers: corsHeaders });
+            }
+
+            // ── BATCH РЕЖИМ (fallback, parallelMode=false) ──────────────────────
             const fileContents = [];
             let totalBytes = 0;
             const MAX_TOTAL_BYTES = 70 * 1024 * 1024; // 70MB
@@ -394,7 +563,7 @@ serve(async (req) => {
             }
 
             const prompt = getBatchPrompt([...new Set(originalFileNames || storagePaths)] as string[]);
-            const models = ["google/gemini-3-flash-preview", "anthropic/claude-haiku-4.5"];
+            const models = ["google/gemini-3.1-flash-lite-preview", "anthropic/claude-haiku-4.5"];
 
             let aiData;
             for (const model of models) {
