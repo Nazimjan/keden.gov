@@ -65,7 +65,7 @@
                 console.log(`[Keden Keep-Alive] Session active. Tick at ${new Date().toLocaleTimeString()}`);
                 lastRefresh = now;
             } else if (response.status === 401 || response.status === 403) {
-                console.warn(`[Keden Keep-Alive] Auth fail (Status ${response.status}). Token prefix: ${token ? token.substring(0, 10) + '...' : 'none'}`);
+                console.log(`[Keden Keep-Alive] Auth fail (Status ${response.status}). Token prefix: ${token ? token.substring(0, 10) + '...' : 'none'}`);
                 // If it failed with 401, maybe we can try to find a new token in 30 seconds
                 lastRefresh = now - (PING_INTERVAL - 30000);
             } else {
