@@ -359,6 +359,7 @@ document.getElementById('startBtn').onclick = async () => {
         // ФАЗА 1: Подготовка файлов (последовательно, быстро)
         // =====================================================
         const fileJobs = [];
+        const preParsedDocs = []; // Pre-parsed большие Excel файлы (без AI)
 
         for (const file of files) {
             const fileName = file.name.toLowerCase();
@@ -384,12 +385,20 @@ document.getElementById('startBtn').onclick = async () => {
                         filePart = await renderPDFPagesAsImages(file, 5); // рендерим первые 5 страниц
                     }
                 } else if (isExcel) {
-                    console.log(`📊 ${file.name}: Excel, отправляем на анализ...`);
-                    const text = await readExcel(file);
-                    if (!text || text.length < 10) {
-                        throw new Error("Файл Excel пустой или не читается");
+                    console.log(`📊 ${file.name}: Excel, определяем режим парсинга...`);
+                    const largeParsed = await readExcelLarge(file, currentUserInfo?.iin);
+                    if (largeParsed) {
+                        // Большой Excel: товары извлечены кодом, AI не нужен
+                        preParsedDocs.push(largeParsed);
+                        filePart = null; // Не загружать в storage
+                    } else {
+                        // Маленький Excel: обычный путь через AI
+                        const text = await readExcel(file);
+                        if (!text || text.length < 10) {
+                            throw new Error("Файл Excel пустой или не читается");
+                        }
+                        filePart = { text: `--- FILE: ${file.name} (Excel Content) ---\n${text}\n` };
                     }
-                    filePart = { text: `--- FILE: ${file.name} (Excel Content) ---\n${text}\n` };
                 } else if (isImage) {
                     console.log(`🖼️ ${file.name}: изображение, отправляем на анализ...`);
                     const base64 = await fileToOptimizedBase64(file);
@@ -404,10 +413,13 @@ document.getElementById('startBtn').onclick = async () => {
                 }
             } catch (prepErr) {
                 console.warn(`Ошибка подготовки ${file.name}:`, prepErr);
-                filePart = { text: `--- FILE: ${file.name} (Could not read) ---\n` };
+                // Не перезаписываем null (pre-parsed Excel уже добавлен в preParsedDocs)
+                if (filePart !== null) {
+                    filePart = { text: `--- FILE: ${file.name} (Could not read) ---\n` };
+                }
             }
 
-            fileJobs.push({ file, filePart, mimeType });
+            if (filePart !== null) fileJobs.push({ file, filePart, mimeType });
         }
 
         // =====================================================
@@ -432,6 +444,7 @@ document.getElementById('startBtn').onclick = async () => {
             action: 'START_EXTRACTION',
             payload: {
                 documents,
+                preParsedDocuments: preParsedDocs,
                 iin: currentUserInfo ? currentUserInfo.iin : '000000000000',
                 fio: currentUserInfo ? currentUserInfo.fio : 'Пользователь',
                 targetTabId: tab ? tab.id : null

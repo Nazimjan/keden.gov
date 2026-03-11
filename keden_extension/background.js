@@ -84,10 +84,10 @@ let currentAbortController = null;
  */
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'START_EXTRACTION') {
-        const { documents, iin, fio, targetTabId } = request.payload;
+        const { documents, iin, fio, targetTabId, preParsedDocuments = [] } = request.payload;
 
         // Запускаем процесс асинхронно
-        handleExtraction(documents, iin, fio, targetTabId).catch(err => {
+        handleExtraction(documents, iin, fio, targetTabId, preParsedDocuments).catch(err => {
             if (err.name === 'AbortError') {
                 console.log('[Background] Extraction aborted by user');
                 return;
@@ -233,7 +233,7 @@ async function uploadWithRetry(fileName, blobData, mimeType, originalName, maxRe
 /**
  * Основная логика: Загрузка в Storage + Вызов Edge Function
  */
-async function handleExtraction(documents, iin, fio, targetTabId) {
+async function handleExtraction(documents, iin, fio, targetTabId, preParsedDocuments = []) {
     await updateState({
         status: 'PROCESSING',
         progressMessage: 'Загрузка документов в хранилище...',
@@ -286,7 +286,7 @@ async function handleExtraction(documents, iin, fio, targetTabId) {
 
         // 2. Вызов Edge Function — передаём originalFileNames чтобы ИИ мог вернуть их в документах
         const { data: resultData, error: funcError } = await supabaseClient.functions.invoke('extract-ai', {
-            body: { storagePaths, iin, fio, originalFileNames }
+            body: { storagePaths, iin, fio, originalFileNames, preParsedDocuments }
         });
 
         if (funcError) {

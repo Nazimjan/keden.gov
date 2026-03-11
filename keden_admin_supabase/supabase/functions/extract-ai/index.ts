@@ -228,7 +228,7 @@ async function processFileGroup(
                         { role: "system", content: PER_FILE_SYSTEM_PROMPT },
                         { role: "user", content: [{ type: "text", text: prompt }, ...fileContents] },
                     ],
-                    max_tokens: 8192,
+                    max_tokens: 32768,
                     response_format: { type: "json_object" },
                 }),
             });
@@ -380,6 +380,68 @@ serve(async (req) => {
             return new Response(JSON.stringify({ success: true }), { headers: corsHeaders });
         }
 
+        // Action: excel-map — определяет маппинг колонок Excel по скелету таблицы.
+        // Вызывается клиентом перед полной экстракцией (не списывает кредиты).
+        if (action === "excel-map" && jsonBody) {
+            const { skeleton, fileName } = jsonBody;
+            if (!skeleton) throw new Error("Missing skeleton");
+
+            const mappingPrompt = `Ты анализируешь структуру Excel-инвойса для таможни.
+Определи индексы колонок по скелету таблицы ниже.
+
+${skeleton}
+
+Верни ТОЛЬКО JSON без пояснений:
+{
+  "columns": {
+    "commercialName": <число — индекс колонки с наименованием товара (строковое описание)>,
+    "tnvedCode": <число или null — колонка с кодом HS/ТНВЭД>,
+    "quantity": <число — колонка с кол-вом мест (cartons/packages/colli/件数), НЕ штуки (pcs/units)>,
+    "grossWeight": <число — колонка с весом брутто в кг>,
+    "unitPrice": <число или null — цена за единицу (или за N единиц — см. unitPriceDivisor)>,
+    "cost": <число или null — итоговая стоимость строки (Amount/Total/Сумма)>
+  },
+  "currency": "<USD/CNY/EUR/KZT>",
+  "unitPriceDivisor": <1 если цена за 1 шт; 100 если заголовок "PRICE PER 100" или "per 100 units">,
+  "skipRowPatterns": ["ИТОГО", "TOTAL"],
+  "dataStartOffset": 0
+}
+
+ПРАВИЛА:
+- commercialName: колонка с ТЕКСТОВЫМ описанием товара (слова, названия). НИКОГДА не выбирай колонку где только цифры — это HS-код, не название.
+- tnvedCode: колонка с HS/ТНВЭД кодом (6-10 цифр). Типичные значения: 3304990000, 6104200000, 8471300000.
+- quantity: ТОЛЬКО места/места (cartons/colli/packages/件数). Значения обычно целые числа. Если есть и "места" и "штуки" — бери "места".
+- grossWeight: вес в кг — обычно дробные числа (84.5, 1200.0).
+- cost: ИТОГОВАЯ стоимость ВСЕЙ СТРОКИ (Amount/Total), НЕ цена за единицу.
+- unitPrice: цена за 1 штуку (если есть отдельная колонка). Если только unitPrice — укажи её, cost = null.
+- skipRowPatterns: паттерны в commercialName которые означают итоговую строку (не товар).
+- dataStartOffset: 0 если данные идут сразу после заголовка; 1 если есть строка-подзаголовок после заголовка.`;
+
+            const mapResponse = await fetch(OPENROUTER_URL, {
+                method: "POST",
+                headers: {
+                    "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+                    "Content-Type": "application/json",
+                    "HTTP-Referer": "https://keden.kgd.gov.kz",
+                },
+                body: JSON.stringify({
+                    model: "google/gemini-3.1-flash-lite-preview",
+                    messages: [{ role: "user", content: mappingPrompt }],
+                    max_tokens: 512,
+                    response_format: { type: "json_object" },
+                }),
+            });
+
+            if (!mapResponse.ok) throw new Error(`AI error: ${mapResponse.statusText}`);
+            const mapAiData = await mapResponse.json();
+            let mapContent = mapAiData.choices?.[0]?.message?.content?.trim() || "";
+            if (mapContent.startsWith("```")) {
+                mapContent = mapContent.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+            }
+            const mapping = safeParseJSON(mapContent);
+            return new Response(JSON.stringify({ mapping }), { headers: corsHeaders });
+        }
+
         // Action: extract-stream (Single File Streaming)
         if (action === "extract-stream") {
             await checkAndDeductCredits();
@@ -471,35 +533,58 @@ serve(async (req) => {
 
         // Action: extract (Parallel per-file или Batch fallback)
         if (action === "extract" && jsonBody) {
-            const { storagePaths, originalFileNames, parallelMode = true } = jsonBody;
-            if (!storagePaths) throw new Error("Missing storagePaths");
+            const {
+                originalFileNames,
+                parallelMode = true,
+                preParsedDocuments = [],
+            } = jsonBody;
+            const storagePaths: string[] = jsonBody.storagePaths || [];
+
+            if (storagePaths.length === 0 && preParsedDocuments.length === 0) {
+                throw new Error("Missing storagePaths");
+            }
 
             await checkAndDeductCredits();
 
+            /** Конвертирует pre-parsed Excel объект в формат agentResult для merger. */
+            const toParsedAgentResult = (pp: any) => ({
+                filename: pp.fileName,
+                document: { filename: pp.fileName, type: "INVOICE", number: "", date: "" },
+                documents: [{ filename: pp.fileName, type: "INVOICE", number: "", date: "" }],
+                products: pp.products || [],
+                totalWeight: pp.totalWeight || 0,
+                totalPackages: pp.totalPackages || 0,
+                totalCost: pp.totalCost || 0,
+                schemaVersion: "1.0",
+            });
+
             // ── ПАРАЛЛЕЛЬНЫЙ РЕЖИМ (по умолчанию) ──────────────────────────────
             if (parallelMode) {
-                const groups = groupFilesByName(storagePaths, originalFileNames);
-                const models = ["google/gemini-3.1-flash-lite-preview", "anthropic/claude-haiku-4.5"];
-                const sem = createSemaphore(8);
-
-                const promises = Array.from(groups.values()).map((group) =>
-                    sem(() => processFileGroup(supabase, group, models))
-                );
-
-                const settled = await Promise.allSettled(promises);
-
-                const agentResults: any[] = [];
+                // Инжектируем pre-parsed Excel файлы напрямую (без AI)
+                const agentResults: any[] = preParsedDocuments.map(toParsedAgentResult);
                 const failedFiles: string[] = [];
 
-                for (const s of settled) {
-                    if (s.status === "fulfilled" && s.value.result) {
-                        agentResults.push(s.value.result);
-                    } else {
-                        const reason = s.status === "rejected"
-                            ? String(s.reason)
-                            : (s.value?.error || "unknown error");
-                        failedFiles.push(reason);
-                        console.error(`[parallel] Failed:`, reason);
+                if (storagePaths.length > 0) {
+                    const groups = groupFilesByName(storagePaths, originalFileNames);
+                    const models = ["google/gemini-3.1-flash-lite-preview", "anthropic/claude-haiku-4.5"];
+                    const sem = createSemaphore(8);
+
+                    const promises = Array.from(groups.values()).map((group) =>
+                        sem(() => processFileGroup(supabase, group, models))
+                    );
+
+                    const settled = await Promise.allSettled(promises);
+
+                    for (const s of settled) {
+                        if (s.status === "fulfilled" && s.value.result) {
+                            agentResults.push(s.value.result);
+                        } else {
+                            const reason = s.status === "rejected"
+                                ? String(s.reason)
+                                : (s.value?.error || "unknown error");
+                            failedFiles.push(reason);
+                            console.error(`[parallel] Failed:`, reason);
+                        }
                     }
                 }
 
@@ -519,7 +604,7 @@ serve(async (req) => {
                 await supabase.from("logs").insert({
                     user_iin: iin,
                     action_type: "AI_EXTRACT_PARALLEL",
-                    description: `Parallel: ${agentResults.length}/${groups.size} groups OK, ${failedFiles.length} failed`,
+                    description: `Parallel: ${agentResults.length - preParsedDocuments.length} AI + ${preParsedDocuments.length} pre-parsed, ${failedFiles.length} failed`,
                 });
 
                 return new Response(JSON.stringify(result), { headers: corsHeaders });
@@ -583,7 +668,7 @@ serve(async (req) => {
                                 { role: "system", content: SYSTEM_PROMPT },
                                 { role: "user", content: [{ type: "text", text: prompt }, ...fileContents] }
                             ],
-                            max_tokens: 16384,
+                            max_tokens: 32768,
                             response_format: { type: "json_object" }
                         })
                     });
@@ -606,12 +691,16 @@ serve(async (req) => {
             }
 
             const rawParsed = safeParseJSON(content);
-            const result = mergeAgentResults(Array.isArray(rawParsed) ? rawParsed : [rawParsed]);
+            const batchAgentResults = [
+                ...preParsedDocuments.map(toParsedAgentResult),
+                ...(Array.isArray(rawParsed) ? rawParsed : [rawParsed]),
+            ];
+            const result = mergeAgentResults(batchAgentResults);
 
             await supabase.from("logs").insert({
                 user_iin: iin,
                 action_type: "AI_EXTRACT_SINGLE_BATCH",
-                description: `Processed ${storagePaths.length} files`
+                description: `Processed ${storagePaths.length} files + ${preParsedDocuments.length} pre-parsed`,
             });
 
             return new Response(JSON.stringify(result), { headers: corsHeaders });
