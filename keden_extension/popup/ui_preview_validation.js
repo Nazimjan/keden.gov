@@ -71,11 +71,13 @@ function renderValidationSummary(validation) {
     `;
     summaryEl.appendChild(header);
 
-    const errors   = validation.errors || [];
+    const allErrors = validation.errors || [];
+    const criticals = allErrors.filter(e => e.severity === 'CRITICAL');
+    const errors    = allErrors.filter(e => e.severity !== 'CRITICAL');
     const successes = (validation.warnings || []).filter(w => w.severity === 'SUCCESS');
     const warnings  = (validation.warnings || []).filter(w => w.severity !== 'SUCCESS');
 
-    if (errors.length === 0 && warnings.length === 0 && successes.length === 0) {
+    if (allErrors.length === 0 && warnings.length === 0 && successes.length === 0) {
         const ok = document.createElement('div');
         ok.className = 'validation-card success';
         ok.innerHTML = '<div class="validation-icon">✅</div>';
@@ -141,8 +143,9 @@ function renderValidationSummary(validation) {
             const msg = item.message || String(item);
             const card = document.createElement('div');
             card.className = 'validation-card ' + (
-                item.severity === 'ERROR'   ? 'error' :
-                item.severity === 'SUCCESS' ? 'success' : 'warning'
+                item.severity === 'CRITICAL' ? 'error' :
+                item.severity === 'ERROR'    ? 'error' :
+                item.severity === 'SUCCESS'  ? 'success' : 'warning'
             );
             card.style.margin = '0';
 
@@ -176,13 +179,16 @@ function renderValidationSummary(validation) {
         return wrap;
     }
 
-    const hasErrors   = errors.length > 0;
-    const hasWarnings = warnings.length > 0;
+    const hasCriticals = criticals.length > 0;
+    const hasErrors    = errors.length > 0;
+    const hasWarnings  = warnings.length > 0;
 
-    const errGroup  = makeGroup('Критические ошибки', '❌', '#ef4444', errors,   true);
-    const warnGroup = makeGroup('Предупреждения',      '⚠️', '#f59e0b', warnings, hasErrors ? false : true);
-    const okGroup   = makeGroup('Подтверждено',        '✅', '#22c55e', successes, !hasErrors && !hasWarnings);
+    const critGroup = makeGroup('Критично (VIN/Номера ТС)', '🚨', '#dc2626', criticals, true);
+    const errGroup  = makeGroup('Ошибки',                   '❌', '#ef4444', errors,    !hasCriticals);
+    const warnGroup = makeGroup('Предупреждения',            '⚠️', '#f59e0b', warnings,  !hasCriticals && !hasErrors);
+    const okGroup   = makeGroup('Подтверждено',              '✅', '#22c55e', successes,  !hasCriticals && !hasErrors && !hasWarnings);
 
+    if (critGroup) summaryEl.appendChild(critGroup);
     if (errGroup)  summaryEl.appendChild(errGroup);
     if (warnGroup) summaryEl.appendChild(warnGroup);
     if (okGroup)   summaryEl.appendChild(okGroup);

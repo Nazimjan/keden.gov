@@ -46,8 +46,8 @@ Deno.test("calculateSimilarity: пустые строки → 0", () => {
 // ТЕСТЫ merger.ts
 // ═══════════════════════════════════════════════════
 
-Deno.test("mergeAgentResults: пустой массив → пустая структура", () => {
-    const result = mergeAgentResults([]);
+Deno.test("mergeAgentResults: пустой массив → пустая структура", async () => {
+    const result = await mergeAgentResults([]);
     assertExists(result.mergedData);
     assertExists(result.validation);
     assertEquals(result.mergedData.products.length, 0);
@@ -55,7 +55,7 @@ Deno.test("mergeAgentResults: пустой массив → пустая стр�
     assertEquals(result.mergedData.counteragents.consignee.present, false);
 });
 
-Deno.test("mergeAgentResults: один результат с consignor → заполняет counteragents", () => {
+Deno.test("mergeAgentResults: один результат с consignor → заполняет counteragents", async () => {
     const input = [{
         consignor: {
             present: true,
@@ -66,7 +66,7 @@ Deno.test("mergeAgentResults: один результат с consignor → за�
         document: { type: "INVOICE", number: "INV-001", date: "2025-01-15" },
         filename: "invoice.pdf",
     }];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     assertEquals(result.mergedData.counteragents.consignor.present, true);
     assertEquals(
         result.mergedData.counteragents.consignor.nonResidentLegal?.nameRu,
@@ -74,7 +74,7 @@ Deno.test("mergeAgentResults: один результат с consignor → за�
     );
 });
 
-Deno.test("mergeAgentResults: приоритет товаров — REGISTRY(4) > INVOICE(1)", () => {
+Deno.test("mergeAgentResults: приоритет товаров — REGISTRY(4) > INVOICE(1)", async () => {
     const input = [
         {
             document: { type: "INVOICE" },
@@ -92,12 +92,12 @@ Deno.test("mergeAgentResults: приоритет товаров — REGISTRY(4) 
             ],
         },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     assertEquals(result.mergedData.products.length, 2);
     assertEquals(result.mergedData.products[0].commercialName, "Product from registry");
 });
 
-Deno.test("mergeAgentResults: конфликт имён получателя → предупреждение", () => {
+Deno.test("mergeAgentResults: конфликт имён получателя → предупреждение", async () => {
     const input = [
         {
             document: { type: "INVOICE" },
@@ -110,7 +110,7 @@ Deno.test("mergeAgentResults: конфликт имён получателя →
             consignee: { present: true, entityType: "LEGAL", legal: { bin: "123456789012", nameRu: "ТОО БЕТА" } },
         },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     const hasConflictWarning = result.validation.warnings.some(
         (w: any) => {
             const msg = w.message || String(w);
@@ -120,7 +120,7 @@ Deno.test("mergeAgentResults: конфликт имён получателя →
     assertEquals(hasConflictWarning, true);
 });
 
-Deno.test("mergeAgentResults: realTechnicalSum вычисляется как сумма cost товаров", () => {
+Deno.test("mergeAgentResults: realTechnicalSum вычисляется как сумма cost товаров", async () => {
     const input = [{
         document: { type: "INVOICE" },
         filename: "invoice.pdf",
@@ -129,11 +129,11 @@ Deno.test("mergeAgentResults: realTechnicalSum вычисляется как с�
             { tnvedCode: "222222", commercialName: "B", grossWeight: 20, quantity: 2, cost: 200.25, currencyCode: "USD" },
         ],
     }];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     assertEquals(result.validation.realTechnicalSum, 300.75);
 });
 
-Deno.test("mergeAgentResults: транспорт — VEHICLE_DOC имеет приоритет над TRANSPORT_DOC", () => {
+Deno.test("mergeAgentResults: транспорт — VEHICLE_DOC имеет приоритет над TRANSPORT_DOC", async () => {
     const input = [
         {
             document: { type: "TRANSPORT_DOC" },
@@ -146,18 +146,18 @@ Deno.test("mergeAgentResults: транспорт — VEHICLE_DOC имеет пр
             vehicles: { tractorRegNumber: "333CCC03", tractorCountry: "KZ", trailerRegNumber: "44DDD04", trailerCountry: "KZ" },
         },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     // handleVehicles: picks VEHICLE_DOC if present
     assertEquals(result.mergedData.vehicles.tractorRegNumber, "333CCC03");
 });
 
-Deno.test("mergeAgentResults: водитель из DRIVER_ID — driver.present=true", () => {
+Deno.test("mergeAgentResults: водитель из DRIVER_ID — driver.present=true", async () => {
     const input = [{
         document: { type: "DRIVER_ID" },
         filename: "passport.pdf",
         driver: { present: true, iin: "990101350123", firstName: "IVAN", lastName: "PETROV" },
     }];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     assertEquals(result.mergedData.driver.present, true);
     assertEquals(result.mergedData.driver.iin, "990101350123");
     assertEquals(result.mergedData.driver.firstName, "IVAN");
@@ -168,7 +168,7 @@ Deno.test("mergeAgentResults: водитель из DRIVER_ID — driver.present
 // Из-за этого merger не находит CMR-запись и берёт первый элемент (INVOICE).
 // Тест зафиксирован с РЕАЛЬНЫМ поведением. Исправление: сделать проверку
 // case-insensitive: m.source.toLowerCase().includes("cmr")
-Deno.test("mergeAgentResults: страны — CMR-приоритет работает (кейс-инсенситив)", () => {
+Deno.test("mergeAgentResults: страны — CMR-приоритет работает (кейс-инсенситив)", async () => {
     const input = [
         {
             document: { type: "INVOICE" },
@@ -181,19 +181,19 @@ Deno.test("mergeAgentResults: страны — CMR-приоритет работ
             countries: { departureCountry: "AF", destinationCountry: "KZ" },
         },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     // Теперь source "Транспортный док. (cmr.pdf)".toLowerCase().includes("cmr") = true
     // Берётся второй элемент (CMR): "AF"
     assertEquals(result.mergedData.countries.departureCountry, "AF");
 });
 
-Deno.test("mergeAgentResults: документы собираются из всех результатов", () => {
+Deno.test("mergeAgentResults: документы собираются из всех результатов", async () => {
     const input = [
         { document: { type: "INVOICE", number: "INV-1", date: "2025-01-01" }, filename: "inv.pdf" },
         { document: { type: "TRANSPORT_DOC", number: "CMR-1", date: "2025-01-02" }, filename: "cmr.pdf" },
         { document: { type: "DRIVER_ID", number: "N12345", date: "2020-05-01" }, filename: "pass.pdf" },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     assertEquals(result.documents.length, 3);
 });
 
@@ -201,7 +201,7 @@ Deno.test("mergeAgentResults: документы собираются из вс�
 // ТЕСТЫ составных ключей crossChecks
 // ═══════════════════════════════════════════════════
 
-Deno.test("getDocLabel: составные ключи 'тип:файл' → читаемая метка", () => {
+Deno.test("getDocLabel: составные ключи 'тип:файл' → читаемая метка", async () => {
     assertEquals(getDocLabel("invoice:ИНВОИС.jpg"), "Инвойс (ИНВОИС.jpg)");
     assertEquals(getDocLabel("cmr:CMR.jpg"), "CMR (CMR.jpg)");
     assertEquals(getDocLabel("ttn:ттн.jpg"), "ТТН (ттн.jpg)");
@@ -210,7 +210,7 @@ Deno.test("getDocLabel: составные ключи 'тип:файл' → чи
     assertEquals(getDocLabel("cmr"), "CMR");
 });
 
-Deno.test("crossChecks: составные ключи 'invoice:file.jpg' и 'invoice:file.xlsx' сохраняются", () => {
+Deno.test("crossChecks: составные ключи 'invoice:file.jpg' и 'invoice:file.xlsx' сохраняются", async () => {
     const input = [{
         schemaVersion: "1.0",
         document: { type: "INVOICE" },
@@ -229,13 +229,13 @@ Deno.test("crossChecks: составные ключи 'invoice:file.jpg' и 'inv
             },
         },
     }];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     const consignorNames = result.validation.crossChecks?.names?.consignor;
     // Все 4 ключа должны сохраниться (deepMergeCrossChecks не теряет их)
     assertEquals(Object.keys(consignorNames).length, 4);
 });
 
-Deno.test("crossChecks: Excel-инвойс с опечаткой порождает ошибку ОПЕЧАТКА/КОНФЛИКТ", () => {
+Deno.test("crossChecks: Excel-инвойс с опечаткой порождает ошибку ОПЕЧАТКА/КОНФЛИКТ", async () => {
     const input = [{
         schemaVersion: "1.0",
         document: { type: "INVOICE" },
@@ -260,7 +260,7 @@ Deno.test("crossChecks: Excel-инвойс с опечаткой порожда�
             },
         },
     }];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     // Должна быть ошибка с упоминанием Excel-файла
     const allMessages = [
         ...result.validation.errors.map((e: any) => e.message || String(e)),
@@ -272,14 +272,14 @@ Deno.test("crossChecks: Excel-инвойс с опечаткой порожда�
     assertEquals(hasExcelError, true, "Ошибка в Excel-инвойсе должна быть обнаружена");
 });
 
-Deno.test("mergeAgentResults: schemaVersion unknown → validation warning", () => {
+Deno.test("mergeAgentResults: schemaVersion unknown → validation warning", async () => {
     const input = [{
         schemaVersion: "99.0",
         document: { type: "INVOICE" },
         filename: "invoice.pdf",
         products: [],
     }];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     const hasSchemaWarning = result.validation.warnings.some(
         (w: any) => {
             const msg = w.message || String(w);
@@ -293,7 +293,7 @@ Deno.test("mergeAgentResults: schemaVersion unknown → validation warning", () 
 // ТЕСТЫ параллельного режима (buildProgrammaticCrossChecks)
 // ═══════════════════════════════════════════════════
 
-Deno.test("parallel: buildProgrammaticCrossChecks строит weight из docTotals", () => {
+Deno.test("parallel: buildProgrammaticCrossChecks строит weight из docTotals", async () => {
     // Два агента без AI crossChecks — merger должен собрать их сам
     const input = [
         {
@@ -312,7 +312,7 @@ Deno.test("parallel: buildProgrammaticCrossChecks строит weight из docTo
             totalCost: 0,
         },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     const wt = result.validation.crossChecks?.weight;
     assertExists(wt, "crossChecks.weight должен быть собран программно");
     const weightValues = Object.values(wt).filter((v: any) => typeof v === "number");
@@ -321,7 +321,7 @@ Deno.test("parallel: buildProgrammaticCrossChecks строит weight из docTo
     assertEquals(Object.values(wt).some((v: any) => v === 28420), true, "Вес CMR 28420");
 });
 
-Deno.test("parallel: конфликт имён отправителя обнаруживается программно (без AI crossChecks)", () => {
+Deno.test("parallel: конфликт имён отправителя обнаруживается программно (без AI crossChecks)", async () => {
     // Агенты возвращают разные имена отправителя, crossChecks не заполнены AI
     const input = [
         {
@@ -347,7 +347,7 @@ Deno.test("parallel: конфликт имён отправителя обнар
             },
         },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     const allMsgs = [
         ...result.validation.errors.map((e: any) => e.message || String(e)),
         ...result.validation.warnings.map((w: any) => w.message || String(w)),
@@ -364,7 +364,7 @@ Deno.test("parallel: конфликт имён отправителя обнар
     assertEquals(nameValues.some((v) => v.includes("SHANGHAI")), true);
 });
 
-Deno.test("parallel: расхождение веса генерирует ошибку НЕСООТВЕТСТВИЕ", () => {
+Deno.test("parallel: расхождение веса генерирует ошибку НЕСООТВЕТСТВИЕ", async () => {
     // Значительное расхождение веса между документами → должна быть ошибка
     const input = [
         {
@@ -382,7 +382,7 @@ Deno.test("parallel: расхождение веса генерирует оши
             totalCost: 0,
         },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     const hasWeightError = result.validation.errors.some(
         (e: any) => {
             const msg = e.message || String(e);
@@ -392,7 +392,7 @@ Deno.test("parallel: расхождение веса генерирует оши
     assertEquals(hasWeightError, true, "Ошибка о расхождении веса должна присутствовать");
 });
 
-Deno.test("parallel: номер тягача совпадает в CMR и техпаспорте → подтверждение", () => {
+Deno.test("parallel: номер тягача совпадает в CMR и техпаспорте → подтверждение", async () => {
     const input = [
         {
             document: { type: "TRANSPORT_DOC" },
@@ -415,7 +415,7 @@ Deno.test("parallel: номер тягача совпадает в CMR и тех
             },
         },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     // crossChecks.vehicles.tractor должен быть собран
     const tractor = result.validation.crossChecks?.vehicles?.tractor;
     assertExists(tractor, "crossChecks.vehicles.tractor должен быть собран");
@@ -431,7 +431,7 @@ Deno.test("parallel: номер тягача совпадает в CMR и тех
     assertEquals(hasConfirmation, true, "Подтверждение номера тягача должно присутствовать");
 });
 
-Deno.test("parallel: AI-заполненные crossChecks не перезаписываются программной сборкой", () => {
+Deno.test("parallel: AI-заполненные crossChecks не перезаписываются программной сборкой", async () => {
     // AI уже заполнил crossChecks.weight с конкретным ключом
     const aiProvidedWeight = 99999;
     const input = [{
@@ -449,7 +449,7 @@ Deno.test("parallel: AI-заполненные crossChecks не перезапи
             },
         },
     }];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
     // AI-ключ должен сохранить своё значение
     assertEquals(
         result.validation.crossChecks?.weight?.["invoice:invoice.jpg"],

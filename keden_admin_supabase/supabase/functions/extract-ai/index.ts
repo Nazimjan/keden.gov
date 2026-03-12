@@ -4,6 +4,7 @@ import { getBatchPrompt, SYSTEM_PROMPT, PER_FILE_SYSTEM_PROMPT, getPerFilePrompt
 import { mergeAgentResults } from "./merger.ts";
 
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
+const GOOGLE_AI_KEY = Deno.env.get("GOOGLE_AI_KEY");
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 /**
@@ -155,6 +156,63 @@ function groupFilesByName(
         groups.get(name)!.paths.push(storagePaths[i]);
     }
     return groups;
+}
+
+/**
+ * Переводит названия товаров на русский язык через AI (батчевый запрос).
+ * Используется для Excel-инвойсов, которые парсятся клиентом без AI.
+ * Если название уже содержит кириллицу — пропускается.
+ * Возвращает Map<originalName, translatedName>.
+ */
+async function translateProductNames(names: string[]): Promise<Map<string, string>> {
+    const toTranslate = [...new Set(names.filter((n) => n && !/[а-яА-ЯёЁ]/.test(n)))];
+    const result = new Map<string, string>();
+    if (toTranslate.length === 0) return result;
+
+    const numbered = toTranslate.map((n, i) => `${i + 1}. ${n}`).join("\n");
+    const prompt = `Переведи на русский язык следующие наименования таможенных товаров.
+Верни ТОЛЬКО JSON-объект вида { "1": "перевод 1", "2": "перевод 2", ... }.
+Ничего кроме JSON. Не добавляй оригинал, только перевод.
+
+${numbered}`;
+
+    try {
+        const res = await fetch(OPENROUTER_URL, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://keden.kgd.gov.kz",
+            },
+            body: JSON.stringify({
+                model: "google/gemini-3.1-flash-lite-preview",
+                messages: [{ role: "user", content: prompt }],
+                max_tokens: 2048,
+                response_format: { type: "json_object" },
+            }),
+        });
+        if (!res.ok) throw new Error(`translate ${res.status}`);
+        const data = await res.json();
+        let content = (data.choices?.[0]?.message?.content || "").trim();
+        if (content.startsWith("```")) content = content.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
+        const translations: Record<string, string> = JSON.parse(content);
+        toTranslate.forEach((name, i) => {
+            const ru = translations[String(i + 1)];
+            if (ru) result.set(name, `${name} / ${ru}`);
+        });
+    } catch (e) {
+        console.warn("[translate] Failed:", e);
+    }
+    return result;
+}
+
+/** Применяет переводы к списку продуктов (in-place). */
+function applyTranslations(products: any[], translations: Map<string, string>): void {
+    if (translations.size === 0) return;
+    for (const p of products) {
+        const t = translations.get(p.commercialName);
+        if (t) p.commercialName = t;
+    }
 }
 
 /** Семафор: ограничивает количество одновременных вызовов. */
@@ -560,6 +618,19 @@ ${skeleton}
 
             // ── ПАРАЛЛЕЛЬНЫЙ РЕЖИМ (по умолчанию) ──────────────────────────────
             if (parallelMode) {
+                // Переводим названия товаров из Excel-инвойсов на русский
+                if (preParsedDocuments.length > 0) {
+                    const allNames = preParsedDocuments.flatMap((pp: any) =>
+                        (pp.products || []).map((p: any) => p.commercialName as string)
+                    );
+                    const translations = await translateProductNames(allNames);
+                    if (translations.size > 0) {
+                        for (const pp of preParsedDocuments) {
+                            applyTranslations(pp.products || [], translations);
+                        }
+                    }
+                }
+
                 // Инжектируем pre-parsed Excel файлы напрямую (без AI)
                 const agentResults: any[] = preParsedDocuments.map(toParsedAgentResult);
                 const failedFiles: string[] = [];
@@ -592,7 +663,7 @@ ${skeleton}
                     throw new Error(`AI error: All file extractions failed.`);
                 }
 
-                const result = mergeAgentResults(agentResults);
+                const result = await mergeAgentResults(agentResults, GOOGLE_AI_KEY);
 
                 for (const f of failedFiles) {
                     result.validation.warnings.push({
@@ -690,12 +761,23 @@ ${skeleton}
                 content = content.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "");
             }
 
+            // Переводим Excel-продукты и в batch-режиме
+            if (preParsedDocuments.length > 0) {
+                const allNames = preParsedDocuments.flatMap((pp: any) =>
+                    (pp.products || []).map((p: any) => p.commercialName as string)
+                );
+                const translations = await translateProductNames(allNames);
+                if (translations.size > 0) {
+                    for (const pp of preParsedDocuments) applyTranslations(pp.products || [], translations);
+                }
+            }
+
             const rawParsed = safeParseJSON(content);
             const batchAgentResults = [
                 ...preParsedDocuments.map(toParsedAgentResult),
                 ...(Array.isArray(rawParsed) ? rawParsed : [rawParsed]),
             ];
-            const result = mergeAgentResults(batchAgentResults);
+            const result = await mergeAgentResults(batchAgentResults, GOOGLE_AI_KEY);
 
             await supabase.from("logs").insert({
                 user_iin: iin,

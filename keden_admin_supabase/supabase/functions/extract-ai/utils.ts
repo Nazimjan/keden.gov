@@ -63,3 +63,39 @@ function levenshteinDistance(s1: string, s2: string): number {
     }
     return costs[s2.length];
 }
+/** Считает семантическую схожесть через эмбеддинги (требует GOOGLE_AI_KEY) */
+export async function calculateSemanticSimilarity(s1: string, s2: string, apiKey: string): Promise<number> {
+    if (!s1 || !s2) return 0;
+    if (s1.toUpperCase() === s2.toUpperCase()) return 1.0;
+
+    try {
+        const embed = async (text: string) => {
+            const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2-preview:embedContent?key=${apiKey}`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    content: { parts: [{ text }] }
+                })
+            });
+            if (!res.ok) throw new Error(`Embedding error: ${res.status}`);
+            const data = await res.json();
+            return data.embedding.values;
+        };
+
+        const [v1, v2] = await Promise.all([embed(s1), embed(s2)]);
+        
+        // Косинусное сходство
+        let dotProduct = 0;
+        let mag1 = 0;
+        let mag2 = 0;
+        for (let i = 0; i < v1.length; i++) {
+            dotProduct += v1[i] * v2[i];
+            mag1 += v1[i] * v1[i];
+            mag2 += v2[i] * v2[i];
+        }
+        return dotProduct / (Math.sqrt(mag1) * Math.sqrt(mag2));
+    } catch (e) {
+        console.warn("Semantic similarity failed, falling back to Levenshtein:", e);
+        return calculateSimilarity(s1, s2);
+    }
+}

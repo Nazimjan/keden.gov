@@ -198,12 +198,12 @@ function makeTtnResult() {
 // ЧАСТЬ 1: normalizeName — реальные названия из документов
 // ═══════════════════════════════════════════════════════════
 
-Deno.test("normalizeName: YIWU TAMING TRADING CO., LTD → удаляет правовые формы", () => {
+Deno.test("normalizeName: YIWU TAMING TRADING CO., LTD → удаляет правовые формы", async () => {
     // TRADING, CO, LTD — все три должны быть удалены
     assertEquals(normalizeName("YIWU TAMING TRADING CO., LTD"), "YIWUTAMING");
 });
 
-Deno.test("normalizeName: YIWU TAMING TRADING CO.,LTD (без пробела) — идентичен варианту с пробелом", () => {
+Deno.test("normalizeName: YIWU TAMING TRADING CO.,LTD (без пробела) — идентичен варианту с пробелом", async () => {
     // В документах встречаются оба формата — нормализация должна давать одинаковый результат
     assertEquals(
         normalizeName("YIWU TAMING TRADING CO.,LTD"),
@@ -211,19 +211,19 @@ Deno.test("normalizeName: YIWU TAMING TRADING CO.,LTD (без пробела) �
     );
 });
 
-Deno.test("normalizeName: OMAR NOMAN LTD → удаляет LTD", () => {
+Deno.test("normalizeName: OMAR NOMAN LTD → удаляет LTD", async () => {
     assertEquals(normalizeName("OMAR NOMAN LTD"), "OMARNOMAN");
 });
 
-Deno.test("normalizeName: OMAR NOMAN LTD === OMAR NOMAN LIMITED (разные формы записи)", () => {
+Deno.test("normalizeName: OMAR NOMAN LTD === OMAR NOMAN LIMITED (разные формы записи)", async () => {
     assertEquals(normalizeName("OMAR NOMAN LTD"), normalizeName("OMAR NOMAN LIMITED"));
 });
 
-Deno.test("normalizeName: ТОО SENIM-PARTS → удаляет ТОО, оставляет SENIMPARTS", () => {
+Deno.test("normalizeName: ТОО SENIM-PARTS → удаляет ТОО, оставляет SENIMPARTS", async () => {
     assertEquals(normalizeName("ТОО SENIM-PARTS"), "SENIMPARTS");
 });
 
-Deno.test("normalizeName: SENIM-PARTS (без ТОО) === ТОО SENIM-PARTS (с ТОО)", () => {
+Deno.test("normalizeName: SENIM-PARTS (без ТОО) === ТОО SENIM-PARTS (с ТОО)", async () => {
     // Перевозчик в CMR может быть написан и так и так
     assertEquals(normalizeName("SENIM-PARTS"), normalizeName("ТОО SENIM-PARTS"));
 });
@@ -232,19 +232,19 @@ Deno.test("normalizeName: SENIM-PARTS (без ТОО) === ТОО SENIM-PARTS (с
 // ЧАСТЬ 2: calculateSimilarity — опечатки и вариации
 // ═══════════════════════════════════════════════════════════
 
-Deno.test("calculateSimilarity: EYELESHES vs EYELASHES — опечатка в инвойсе, схожесть > 0.8", () => {
+Deno.test("calculateSimilarity: EYELESHES vs EYELASHES — опечатка в инвойсе, схожесть > 0.8", async () => {
     // В документе написано EYELESHES (вместо EYELASHES) — система должна это поймать
     const sim = calculateSimilarity("EYELESHES", "EYELASHES");
     assertEquals(sim > 0.8, true, `Ожидалось > 0.8, получено ${sim}`);
 });
 
-Deno.test("calculateSimilarity: YIWU TAMING CO LTD vs YIWU TAMING CO.,LTD после нормализации = 1.0", () => {
+Deno.test("calculateSimilarity: YIWU TAMING CO LTD vs YIWU TAMING CO.,LTD после нормализации = 1.0", async () => {
     const a = normalizeName("YIWU TAMING TRADING CO., LTD");
     const b = normalizeName("YIWU TAMING TRADING CO.,LTD");
     assertEquals(calculateSimilarity(a, b), 1.0);
 });
 
-Deno.test("calculateSimilarity: OMAR NOMAN vs OMARNOMAN — полное совпадение после нормализации", () => {
+Deno.test("calculateSimilarity: OMAR NOMAN vs OMARNOMAN — полное совпадение после нормализации", async () => {
     const a = normalizeName("OMAR NOMAN LTD");
     const b = normalizeName("OMAR NOMAN LIMITED");
     assertEquals(calculateSimilarity(a, b), 1.0);
@@ -254,8 +254,8 @@ Deno.test("calculateSimilarity: OMAR NOMAN vs OMARNOMAN — полное сов�
 // ЧАСТЬ 3: mergeAgentResults — интеграция CMR + Invoice
 // ═══════════════════════════════════════════════════════════
 
-Deno.test("merge[CMR+Invoice]: consignor — YIWU TAMING", () => {
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+Deno.test("merge[CMR+Invoice]: consignor — YIWU TAMING", async () => {
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const consignor = result.mergedData.counteragents.consignor;
     assertExists(consignor);
     assertEquals(consignor.present, true);
@@ -265,8 +265,8 @@ Deno.test("merge[CMR+Invoice]: consignor — YIWU TAMING", () => {
     assertEquals(normalizeName(rawName), "YIWUTAMING");
 });
 
-Deno.test("merge[CMR+Invoice]: consignee — OMAR NOMAN LTD, страна AF", () => {
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+Deno.test("merge[CMR+Invoice]: consignee — OMAR NOMAN LTD, страна AF", async () => {
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const consignee = result.mergedData.counteragents.consignee;
     assertExists(consignee);
     assertEquals(consignee.present, true);
@@ -275,8 +275,8 @@ Deno.test("merge[CMR+Invoice]: consignee — OMAR NOMAN LTD, страна AF", (
     assertEquals(consignee.addresses[0]?.countryCode, "AF");
 });
 
-Deno.test("merge[CMR+Invoice]: carrier — SENIM-PARTS с БИН 250140031008", () => {
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+Deno.test("merge[CMR+Invoice]: carrier — SENIM-PARTS с БИН 250140031008", async () => {
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const carrier = result.mergedData.counteragents.carrier;
     assertExists(carrier);
     assertEquals(carrier.present, true);
@@ -285,35 +285,35 @@ Deno.test("merge[CMR+Invoice]: carrier — SENIM-PARTS с БИН 250140031008", 
     assertEquals(normalizeName(carrier.legal?.nameRu || ""), "SENIMPARTS");
 });
 
-Deno.test("merge[CMR+Invoice]: страны — CN отправка, AF назначение", () => {
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+Deno.test("merge[CMR+Invoice]: страны — CN отправка, AF назначение", async () => {
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     assertEquals(result.mergedData.countries.departureCountry, "CN");
     assertEquals(result.mergedData.countries.destinationCountry, "AF");
 });
 
-Deno.test("merge[CMR+Invoice]: страны берутся из CMR когда source содержит 'cmr'", () => {
+Deno.test("merge[CMR+Invoice]: страны берутся из CMR когда source содержит 'cmr'", async () => {
     // CMR указывает CN→AF, Invoice тоже CN→AF — но приоритет у CMR
     const cmr = makeCmrResult();
     const inv = makeInvoiceResult();
     // Симулируем расхождение: Invoice говорит другую страну
     inv.countries.departureCountry = "TR";
-    const result = mergeAgentResults([cmr, inv]);
+    const result = await mergeAgentResults([cmr, inv]);
     // CMR должен выиграть, так как source = "Транспортный dok. (CMR.jpg)" содержит "cmr"
     assertEquals(result.mergedData.countries.departureCountry, "CN");
 });
 
-Deno.test("merge[Invoice]: 19 товаров, все извлечены", () => {
-    const result = mergeAgentResults([makeInvoiceResult()]);
+Deno.test("merge[Invoice]: 19 товаров, все извлечены", async () => {
+    const result = await mergeAgentResults([makeInvoiceResult()]);
     assertEquals(result.mergedData.products.length, 19);
 });
 
-Deno.test("merge[Invoice]: realTechnicalSum = 19680 USD", () => {
-    const result = mergeAgentResults([makeInvoiceResult()]);
+Deno.test("merge[Invoice]: realTechnicalSum = 19680 USD", async () => {
+    const result = await mergeAgentResults([makeInvoiceResult()]);
     assertEquals(result.validation.realTechnicalSum, 19680);
 });
 
-Deno.test("merge[Invoice]: финансовая проверка ПРОЙДЕНА (invoiceTotal == calculatedSum)", () => {
-    const result = mergeAgentResults([makeInvoiceResult()]);
+Deno.test("merge[Invoice]: финансовая проверка ПРОЙДЕНА (invoiceTotal == calculatedSum)", async () => {
+    const result = await mergeAgentResults([makeInvoiceResult()]);
     const successMsg = result.validation.warnings.some(
         (w: any) => (w.message || String(w)).includes("подтвержден") || (w.message || String(w)).includes("19680"),
     );
@@ -325,10 +325,10 @@ Deno.test("merge[Invoice]: финансовая проверка ПРОЙДЕН�
     assertEquals(financeError, false);
 });
 
-Deno.test("merge[CMR+Invoice]: кол-во мест совпадает (CMR=1640, Invoice=1640) → SUCCESS", () => {
+Deno.test("merge[CMR+Invoice]: кол-во мест совпадает (CMR=1640, Invoice=1640) → SUCCESS", async () => {
     // makeInvoiceResult() уже содержит crossChecks.packages = { cmr:1640, invoice:1640, ttn:1640 }
     // После shallow-merge Invoice перезаписывает crossChecks CMR, поэтому все 3 ключа видны
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const packagesOk = result.validation.warnings.some(
         (w: any) => {
             const msg = w.message || String(w);
@@ -338,8 +338,8 @@ Deno.test("merge[CMR+Invoice]: кол-во мест совпадает (CMR=1640
     assertEquals(packagesOk, true);
 });
 
-Deno.test("merge[CMR+Invoice]: вес совпадает (CMR=28420, Invoice=28420) → SUCCESS", () => {
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+Deno.test("merge[CMR+Invoice]: вес совпадает (CMR=28420, Invoice=28420) → SUCCESS", async () => {
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const weightOk = result.validation.warnings.some(
         (w: any) => {
             const msg = w.message || String(w);
@@ -349,25 +349,25 @@ Deno.test("merge[CMR+Invoice]: вес совпадает (CMR=28420, Invoice=284
     assertEquals(weightOk, true);
 });
 
-Deno.test("merge[CMR+Invoice]: транспорт — тягач 584AEK19, прицеп 84ADL19", () => {
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+Deno.test("merge[CMR+Invoice]: транспорт — тягач 584AEK19, прицеп 84ADL19", async () => {
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     assertEquals(result.mergedData.vehicles.tractorRegNumber, "584AEK19");
     assertEquals(result.mergedData.vehicles.trailerRegNumber, "84ADL19");
     assertEquals(result.mergedData.vehicles.tractorCountry, "KZ");
     assertEquals(result.mergedData.vehicles.trailerCountry, "KZ");
 });
 
-Deno.test("merge[CMR+Invoice]: отправитель — незначительная опечатка (CO., vs CO.,) не создает ERROR", () => {
+Deno.test("merge[CMR+Invoice]: отправитель — незначительная опечатка (CO., vs CO.,) не создает ERROR", async () => {
     // Два варианта написания: "CO., LTD" vs "CO.,LTD" — нормализуются одинаково → не конфликт
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const consignorConflict = result.validation.errors.some(
         (e: any) => (e.message || String(e)).includes("РАСХОЖДЕНИЕ У ОТПРАВИТЕЛЯ"),
     );
     assertEquals(consignorConflict, false);
 });
 
-Deno.test("merge[CMR+Invoice]: получатель совпадает во всех документах → нет КОНФЛИКТ-предупреждений", () => {
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+Deno.test("merge[CMR+Invoice]: получатель совпадает во всех документах → нет КОНФЛИКТ-предупреждений", async () => {
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const consigneeConflict = result.validation.warnings.some(
         (w: any) => {
             const msg = w.message || String(w);
@@ -381,17 +381,17 @@ Deno.test("merge[CMR+Invoice]: получатель совпадает во вс
 // ЧАСТЬ 4: граничные случаи из этих документов
 // ═══════════════════════════════════════════════════════════
 
-Deno.test("merge[Invoice]: дублирующийся HS код 950691 → оба товара сохранены (KNEE BRACE и SPORTS EQUIPMENT)", () => {
-    const result = mergeAgentResults([makeInvoiceResult()]);
+Deno.test("merge[Invoice]: дублирующийся HS код 950691 → оба товара сохранены (KNEE BRACE и SPORTS EQUIPMENT)", async () => {
+    const result = await mergeAgentResults([makeInvoiceResult()]);
     const with950691 = result.mergedData.products.filter(
         (p: any) => p.tnvedCode === "950691",
     );
     assertEquals(with950691.length, 2, "Оба товара с одинаковым HS кодом должны быть сохранены");
 });
 
-Deno.test("merge[Invoice]: дублирующийся HS 732399 → два товара (TEA MAKER и WATER JUG)", () => {
+Deno.test("merge[Invoice]: дублирующийся HS 732399 → два товара (TEA MAKER и WATER JUG)", async () => {
     // Оба переводятся как «чайник», но это разные товары
-    const result = mergeAgentResults([makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeInvoiceResult()]);
     const with732399 = result.mergedData.products.filter(
         (p: any) => p.tnvedCode === "732399",
     );
@@ -401,8 +401,8 @@ Deno.test("merge[Invoice]: дублирующийся HS 732399 → два то�
     assertEquals(names.some((n: string) => n.includes("WATER JUG")), true);
 });
 
-Deno.test("merge[Invoice]: опечатка EYELESHES сохранена как есть в commercialName", () => {
-    const result = mergeAgentResults([makeInvoiceResult()]);
+Deno.test("merge[Invoice]: опечатка EYELESHES сохранена как есть в commercialName", async () => {
+    const result = await mergeAgentResults([makeInvoiceResult()]);
     const eyelash = result.mergedData.products.find(
         (p: any) => p.commercialName.includes("EYELESHES"),
     );
@@ -411,56 +411,56 @@ Deno.test("merge[Invoice]: опечатка EYELESHES сохранена как 
     assertEquals(eyelash.cost, 480);
 });
 
-Deno.test("merge[CMR+Invoice+ТТН]: три документа — документы собираются все 3", () => {
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult(), makeTtnResult()]);
+Deno.test("merge[CMR+Invoice+ТТН]: три документа — документы собираются все 3", async () => {
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult(), makeTtnResult()]);
     assertEquals(result.documents.length, 3);
 });
 
-Deno.test("merge[CMR+Invoice+ТТН]: ТТН не перебивает товары из инвойса (Invoice priority=1 > TTN данные)", () => {
+Deno.test("merge[CMR+Invoice+ТТН]: ТТН не перебивает товары из инвойса (Invoice priority=1 > TTN данные)", async () => {
     // ТТН не содержит список товаров — продукты берутся из Invoice
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult(), makeTtnResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult(), makeTtnResult()]);
     assertEquals(result.mergedData.products.length, 19);
 });
 
-Deno.test("merge: если финансы не совпадают — ОШИБКА в validation.errors", () => {
+Deno.test("merge: если финансы не совпадают — ОШИБКА в validation.errors", async () => {
     // Симулируем расхождение: AI извлёк сумму 19680, а товары считаются в 15000
     const inv = makeInvoiceResult();
     // Портим стоимость первого товара
     inv.products[0].cost = 100; // было 6876, теперь 100 → итог = 19680 - 6776 = 12904
-    const result = mergeAgentResults([inv]);
+    const result = await mergeAgentResults([inv]);
     const hasFinanceError = result.validation.errors.some(
         (e: any) => (e.message || String(e)).includes("ОШИБКА В СУММЕ"),
     );
     assertEquals(hasFinanceError, true);
 });
 
-Deno.test("merge[CMR]: получатель — адрес без CONTACT-строки (контакт вырезан)", () => {
+Deno.test("merge[CMR]: получатель — адрес без CONTACT-строки (контакт вырезан)", async () => {
     // Проверяем что fullAddress не содержит телефонный номер получателя
     // (0093791888777 — должен быть вырезан на стороне AI согласно промпту)
-    const result = mergeAgentResults([makeCmrResult()]);
+    const result = await mergeAgentResults([makeCmrResult()]);
     const addr = result.mergedData.counteragents.consignee?.addresses[0]?.fullAddress || "";
     assertEquals(addr.includes("0093791888777"), false, "Телефон не должен попасть в адрес");
     assertEquals(addr.includes("NANGARHAR") || addr.includes("JALAL ABAD"), true, "Адрес должен содержать город");
 });
 
-Deno.test("merge[CMR]: отправитель — адрес без CONTACT-строки", () => {
+Deno.test("merge[CMR]: отправитель — адрес без CONTACT-строки", async () => {
     // CONTACT: 15057904307-15057941852 должен быть вырезан
-    const result = mergeAgentResults([makeCmrResult()]);
+    const result = await mergeAgentResults([makeCmrResult()]);
     const addr = result.mergedData.counteragents.consignor?.addresses[0]?.fullAddress || "";
     assertEquals(addr.includes("15057904307"), false, "Телефон отправителя не должен попасть в адрес");
     assertEquals(addr.includes("YIWU") || addr.includes("ZHEJIANG"), true, "Адрес должен содержать город");
 });
 
-Deno.test("merge[Invoice]: Σ quantity товаров = 1640 мест (совпадает с CMR/ТТН)", () => {
-    const result = mergeAgentResults([makeInvoiceResult()]);
+Deno.test("merge[Invoice]: Σ quantity товаров = 1640 мест (совпадает с CMR/ТТН)", async () => {
+    const result = await mergeAgentResults([makeInvoiceResult()]);
     const totalQty = result.mergedData.products.reduce(
         (acc: number, p: any) => acc + (p.quantity || 0), 0,
     );
     assertEquals(totalQty, 1640);
 });
 
-Deno.test("merge[Invoice]: Σ grossWeight товаров = 28420 кг", () => {
-    const result = mergeAgentResults([makeInvoiceResult()]);
+Deno.test("merge[Invoice]: Σ grossWeight товаров = 28420 кг", async () => {
+    const result = await mergeAgentResults([makeInvoiceResult()]);
     const totalGross = result.mergedData.products.reduce(
         (acc: number, p: any) => acc + (p.grossWeight || 0), 0,
     );
@@ -471,7 +471,7 @@ Deno.test("merge[Invoice]: Σ grossWeight товаров = 28420 кг", () => {
 // ЧАСТЬ 5: Новые программные проверки кросс-валидации
 // ═══════════════════════════════════════════════════════════
 
-Deno.test("crossChecks[deepMerge]: два документа с разными ключами weight объединяются без потери", () => {
+Deno.test("crossChecks[deepMerge]: два документа с разными ключами weight объединяются без потери", async () => {
     // CMR даёт weight.cmr, Invoice даёт weight.invoice — после deep merge оба должны быть
     const cmr = makeCmrResult();
     // @ts-ignore: тестируем частичный crossChecks
@@ -479,13 +479,13 @@ Deno.test("crossChecks[deepMerge]: два документа с разными �
     const inv = makeInvoiceResult();
     // Invoice crossChecks уже содержит { weight: { cmr:28420, invoice:28420 }, ... }
     // Тест: после merge оба ключа присутствуют
-    const result = mergeAgentResults([cmr, inv]);
+    const result = await mergeAgentResults([cmr, inv]);
     const w = result.validation.crossChecks?.weight;
     assertEquals(typeof w?.cmr, "number", "cmr должен сохраниться");
     assertEquals(typeof w?.invoice, "number", "invoice должен сохраниться");
 });
 
-Deno.test("crossChecks[deepMerge]: names сохраняются от обоих документов", () => {
+Deno.test("crossChecks[deepMerge]: names сохраняются от обоих документов", async () => {
     // CMR даёт names.consignee.cmr, Invoice даёт names.consignee.invoice
     const cmr = makeCmrResult();
     // @ts-ignore: тестируем частичный crossChecks
@@ -494,124 +494,124 @@ Deno.test("crossChecks[deepMerge]: names сохраняются от обоих 
     };
     const inv = makeInvoiceResult();
     // makeInvoiceResult уже включает names.consignee.invoice и names.consignee.cmr
-    const result = mergeAgentResults([cmr, inv]);
+    const result = await mergeAgentResults([cmr, inv]);
     const consigneeNames = result.validation.crossChecks?.names?.consignee;
     assertExists(consigneeNames?.cmr, "имя получателя из CMR должно сохраниться");
     assertExists(consigneeNames?.invoice, "имя получателя из Invoice должно сохраниться");
 });
 
-Deno.test("programmatic: Σ quantity=totalPackages → SUCCESS warning", () => {
+Deno.test("programmatic: Σ quantity=totalPackages → SUCCESS warning", async () => {
     // Invoice: 19 товаров, Σ quantity=1640. CMR: totalPackages=1640
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const ok = result.validation.warnings.some(
         (w: any) => (w.message || String(w)).includes("Кол-во мест") && (w.message || String(w)).includes("✅"),
     );
     assertEquals(ok, true, "Должен быть SUCCESS о совпадении кол-ва мест");
 });
 
-Deno.test("programmatic: Σ quantity ≠ totalPackages → ERROR", () => {
+Deno.test("programmatic: Σ quantity ≠ totalPackages → ERROR", async () => {
     // CMR говорит 1640, но в products только 1 позиция с qty=5
     const cmr = makeCmrResult();
     const inv = makeInvoiceResult();
     // Подменяем товары: только одна позиция с qty=5 (вместо 1640)
     inv.products = [{ tnvedCode: "640419", commercialName: "SHOES", grossWeight: 100, quantity: 5, cost: 100, currencyCode: "USD" }];
-    const result = mergeAgentResults([cmr, inv]);
+    const result = await mergeAgentResults([cmr, inv]);
     const hasError = result.validation.errors.some(
         (e: any) => (e.message || String(e)).includes("ОШИБКА КОЛ-ВА МЕСТ"),
     );
     assertEquals(hasError, true);
 });
 
-Deno.test("programmatic: Σ grossWeight=totalWeight → SUCCESS warning", () => {
+Deno.test("programmatic: Σ grossWeight=totalWeight → SUCCESS warning", async () => {
     // Invoice: Σ grossWeight=28420. CMR: totalWeight=28420
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const ok = result.validation.warnings.some(
         (w: any) => (w.message || String(w)).includes("Вес брутто") && (w.message || String(w)).includes("✅"),
     );
     assertEquals(ok, true, "Должен быть SUCCESS о весе брутто");
 });
 
-Deno.test("programmatic: Σ grossWeight ≠ totalWeight → ERROR", () => {
+Deno.test("programmatic: Σ grossWeight ≠ totalWeight → ERROR", async () => {
     const cmr = makeCmrResult(); // totalWeight=28420
     const inv = makeInvoiceResult();
     // Подменяем товар с сильно другим весом
     inv.products = [{ tnvedCode: "640419", commercialName: "SHOES", grossWeight: 100, quantity: 1640, cost: 19680, currencyCode: "USD" }];
-    const result = mergeAgentResults([cmr, inv]);
+    const result = await mergeAgentResults([cmr, inv]);
     const hasError = result.validation.errors.some(
         (e: any) => (e.message || String(e)).includes("ОШИБКА ВЕСА БРУТТО"),
     );
     assertEquals(hasError, true);
 });
 
-Deno.test("programmatic: номер инвойса в CMR совпадает с инвойсом → SUCCESS", () => {
+Deno.test("programmatic: номер инвойса в CMR совпадает с инвойсом → SUCCESS", async () => {
     const cmr = makeCmrResult();
     // @ts-ignore: добавляем invoiceRef к crossChecks
     cmr.validation.crossChecks = { ...cmr.validation.crossChecks, invoiceRef: { cmr: "XYHYWB1707" } };
     // Invoice document.number = "XYHYWB1707"
-    const result = mergeAgentResults([cmr, makeInvoiceResult()]);
+    const result = await mergeAgentResults([cmr, makeInvoiceResult()]);
     const ok = result.validation.warnings.some(
         (w: any) => (w.message || String(w)).includes("XYHYWB1707") && (w.message || String(w)).includes("✅"),
     );
     assertEquals(ok, true);
 });
 
-Deno.test("programmatic: номер инвойса в CMR НЕ совпадает → ERROR", () => {
+Deno.test("programmatic: номер инвойса в CMR НЕ совпадает → ERROR", async () => {
     const cmr = makeCmrResult();
     // @ts-ignore: добавляем invoiceRef к crossChecks
     cmr.validation.crossChecks = { ...cmr.validation.crossChecks, invoiceRef: { cmr: "XYHYWB9999" } };
-    const result = mergeAgentResults([cmr, makeInvoiceResult()]);
+    const result = await mergeAgentResults([cmr, makeInvoiceResult()]);
     const hasError = result.validation.errors.some(
         (e: any) => (e.message || String(e)).includes("РАСХОЖДЕНИЕ НОМЕРА ИНВОЙСА"),
     );
     assertEquals(hasError, true);
 });
 
-Deno.test("programmatic: дата CMR (03.02.2026) ≥ дата инвойса (24.01.2026) → SUCCESS", () => {
+Deno.test("programmatic: дата CMR (03.02.2026) ≥ дата инвойса (24.01.2026) → SUCCESS", async () => {
     // CMR: 2026-02-03, Invoice: 2026-01-24 → порядок правильный
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const ok = result.validation.warnings.some(
         (w: any) => (w.message || String(w)).includes("Порядок дат корректен") && (w.message || String(w)).includes("✅"),
     );
     assertEquals(ok, true);
 });
 
-Deno.test("programmatic: дата CMR раньше инвойса → ERROR", () => {
+Deno.test("programmatic: дата CMR раньше инвойса → ERROR", async () => {
     const cmr = makeCmrResult();
     // Подделываем: CMR датируется 2025-12-01, Invoice 2026-01-24 → ошибка
     cmr.document = { type: "TRANSPORT_DOC", number: "584AEK19", date: "2025-12-01" };
-    const result = mergeAgentResults([cmr, makeInvoiceResult()]);
+    const result = await mergeAgentResults([cmr, makeInvoiceResult()]);
     const hasError = result.validation.errors.some(
         (e: any) => (e.message || String(e)).includes("ОШИБКА ДАТ"),
     );
     assertEquals(hasError, true);
 });
 
-Deno.test("programmatic: страна отправителя (CN) совпадает с departureCountry (CN) → SUCCESS", () => {
+Deno.test("programmatic: страна отправителя (CN) совпадает с departureCountry (CN) → SUCCESS", async () => {
     // YIWU TAMING → countryCode: "CN", departureCountry: "CN"
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const ok = result.validation.warnings.some(
         (w: any) => (w.message || String(w)).includes("Страна отправителя") && (w.message || String(w)).includes("✅"),
     );
     assertEquals(ok, true);
 });
 
-Deno.test("programmatic: страна получателя (AF) совпадает с destinationCountry (AF) → SUCCESS", () => {
+Deno.test("programmatic: страна получателя (AF) совпадает с destinationCountry (AF) → SUCCESS", async () => {
     // OMAR NOMAN → countryCode: "AF", destinationCountry: "AF"
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const ok = result.validation.warnings.some(
         (w: any) => (w.message || String(w)).includes("Страна получателя") && (w.message || String(w)).includes("✅"),
     );
     assertEquals(ok, true);
 });
 
-Deno.test("programmatic: страна отправителя ≠ departureCountry → WARNING о транзите", () => {
+Deno.test("programmatic: страна отправителя ≠ departureCountry → WARNING о транзите", async () => {
     // Симулируем: отправитель из KZ, но departureCountry = CN (транзитный кейс)
     const cmr = makeCmrResult();
     cmr.consignor = {
         ...CONSIGNOR_FROM_CMR,
         addresses: [{ typeCode: "01", countryCode: "KZ", district: "ALMATY", fullAddress: "ALMATY" }],
     };
-    const result = mergeAgentResults([cmr]);
+    const result = await mergeAgentResults([cmr]);
     const hasTransitWarning = result.validation.warnings.some(
         (w: any) => {
             const msg = w.message || String(w);
@@ -625,7 +625,7 @@ Deno.test("programmatic: страна отправителя ≠ departureCountr
 // ЧАСТЬ 6: Majority vote по именам контрагентов
 // ═══════════════════════════════════════════════════════════
 
-Deno.test("majority vote: 2 документа с правильным именем, 1 с опечаткой → опечатка с указанием источника", () => {
+Deno.test("majority vote: 2 документа с правильным именем, 1 с опечаткой → опечатка с указанием источника", async () => {
     // CMR и Invoice говорят "OMAR NOMAN LTD", ТТН говорит "OMAR NOMAN LMT" (опечатка)
     const input = [
         {
@@ -647,7 +647,7 @@ Deno.test("majority vote: 2 документа с правильным имен�
             consignee: { present: true, entityType: "NON_RESIDENT_LEGAL", nonResidentLegal: { nameRu: "OMAR NOMAN LMT" }, legal: { bin: "", nameRu: "" }, addresses: [{ countryCode: "AF" }] }, // опечатка
         },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
 
     // Должно быть предупреждение с указанием ttn.jpg как источника опечатки
     const typoWarning = result.validation.warnings.some(
@@ -663,7 +663,7 @@ Deno.test("majority vote: 2 документа с правильным имен�
     assertEquals(normalizeName(accepted), "OMARNOMAN", "Должно быть принято имя от большинства");
 });
 
-Deno.test("majority vote: источник опечатки указан в сообщении (имя файла)", () => {
+Deno.test("majority vote: источник опечатки указан в сообщении (имя файла)", async () => {
     const input = [
         {
             schemaVersion: "1.0",
@@ -684,7 +684,7 @@ Deno.test("majority vote: источник опечатки указан в со
             consignor: { present: true, entityType: "NON_RESIDENT_LEGAL", nonResidentLegal: { nameRu: "YIWU TMING TRADING CO., LTD" }, legal: { bin: "", nameRu: "" }, addresses: [{ countryCode: "CN" }] }, // опечатка TMING
         },
     ];
-    const result = mergeAgentResults(input);
+    const result = await mergeAgentResults(input);
 
     // Предупреждение должно содержать имя файла с опечаткой
     const warningWithSource = result.validation.warnings.some(
@@ -696,9 +696,9 @@ Deno.test("majority vote: источник опечатки указан в со
     assertEquals(warningWithSource, true, "Источник опечатки (ttn.jpg) должен быть указан в сообщении");
 });
 
-Deno.test("majority vote: все документы согласны — нет конфликтных предупреждений", () => {
+Deno.test("majority vote: все документы согласны — нет конфликтных предупреждений", async () => {
     // CMR и Invoice оба говорят OMAR NOMAN LTD — нет конфликта
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const hasConflict = result.validation.warnings.some(
         (w: any) => {
             const msg = w.message || String(w);
@@ -712,17 +712,17 @@ Deno.test("majority vote: все документы согласны — нет 
 // ЧАСТЬ 7: Программная проверка стоимости (check #14)
 // ═══════════════════════════════════════════════════════════
 
-Deno.test("programmatic: totalCost берётся из Invoice, а не из CMR (per-field best-source)", () => {
+Deno.test("programmatic: totalCost берётся из Invoice, а не из CMR (per-field best-source)", async () => {
     // CMR не содержит totalCost=0, Invoice содержит totalCost=19680
     // Баг: если брать best-document глобально, CMR побеждает по приоритету но его cost=0
     // Fix: per-field — для cost берём лучший источник у которого cost>0 (Invoice)
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     assertEquals(result.mergedData.totalCost, 19680, "totalCost должен равняться 19680 из Invoice");
 });
 
-Deno.test("programmatic: Σ cost товаров = totalCost → SUCCESS warning", () => {
+Deno.test("programmatic: Σ cost товаров = totalCost → SUCCESS warning", async () => {
     // Invoice: Σ cost=19680, totalCost=19680 → совпадает
-    const result = mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
+    const result = await mergeAgentResults([makeCmrResult(), makeInvoiceResult()]);
     const ok = result.validation.warnings.some(
         (w: any) => {
             const msg = w.message || String(w);
@@ -732,7 +732,7 @@ Deno.test("programmatic: Σ cost товаров = totalCost → SUCCESS warning"
     assertEquals(ok, true, "Должен быть SUCCESS о совпадении стоимости");
 });
 
-Deno.test("programmatic: Σ cost товаров ≠ totalCost → ERROR", () => {
+Deno.test("programmatic: Σ cost товаров ≠ totalCost → ERROR", async () => {
     // Invoice говорит totalCost=19680, но товары подменяем на 1 позицию с cost=100
     const inv = makeInvoiceResult();
     inv.products = [{
@@ -740,7 +740,7 @@ Deno.test("programmatic: Σ cost товаров ≠ totalCost → ERROR", () => 
         quantity: 1640, cost: 100, currencyCode: "USD",
     }];
     // totalCost=19680 остаётся в inv, но realTechnicalSum теперь = 100
-    const result = mergeAgentResults([makeCmrResult(), inv]);
+    const result = await mergeAgentResults([makeCmrResult(), inv]);
     const hasError = result.validation.errors.some(
         (e: any) => (e.message || String(e)).includes("ОШИБКА СТОИМОСТИ"),
     );

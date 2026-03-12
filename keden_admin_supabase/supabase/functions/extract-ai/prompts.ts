@@ -72,7 +72,8 @@ export const FILE_AGENT_PROMPT = `
 - ОБЩАЯ СТОИМОСТЬ: Ищи "Total Amount", "USD", "EUR" или "总金额", "价税合计".
 - ВАЛЮТА: Код (USD, CNY, KZT). В китайских файлах "CNY" или "RMB".
 - УСЛОВИЯ ПОСТАВКИ (Incoterms): Ищи FOB, CPT, DAP, FCA. В китайских: "贸易术语". Рядом всегда город.
-- ТОВАРЫ: commercialName (ОРИГИНАЛ / ПЕРЕВОД), tnvedCode (6 цифр), grossWeight, quantity, cost, currencyCode
+- ТОВАРЫ: commercialName, tnvedCode (6 цифр), grossWeight, quantity, cost, currencyCode
+- ⛔ ОБЯЗАТЕЛЬНЫЙ ПЕРЕВОД: поле commercialName ВСЕГДА должно содержать русский перевод. Формат: "ОРИГИНАЛ / РУССКИЙ ПЕРЕВОД". Если название уже на русском — оставь как есть. Если на английском или китайском — добавь перевод через слэш. Примеры: "Men's sandals / Мужские сандалии", "液压泵 / Гидравлический насос", "Hydraulic pump / Гидравлический насос". Никогда не оставляй только иностранное название без перевода.
 - ⚠️ КРИТИЧЕСКИ ВАЖНО (КОЛОНКИ): В таблицах инвойсов часто колонки "G.W. (KGS)" и "AMOUNT (USD)" стоят рядом. НЕ ПЕРЕПУТАЙ ИХ!
 - СМОТРИ НА TOTAL: Чтобы понять, какая колонка — какая, посмотри на строку TOTAL/ИТОГО в самом низу таблицы. 
 - Колонке "cost" (Amount) соответствует итог денег (напр. 19680 USD). 
@@ -111,11 +112,15 @@ export const FILE_AGENT_PROMPT = `
 
 🚗 ТЕХПАСПОРТ (VEHICLE_DOC):
 - tractorRegNumber (3 цифры+3 буквы), trailerRegNumber (2 цифры+3 буквы), страны.
+- vin: Идентификационный номер транспортного средства (17 символов, буквы+цифры, без пробелов). Ищи поле "VIN", "Идентификационный №", "Vin-number".
+- hasStamp: true если виден официальный штамп / печать регистрирующего органа.
 
 📜 СВИДЕТЕЛЬСТВО О ДОПУЩЕНИИ (VEHICLE_PERMIT):
 - document.number: полный номер (напр. 398 55400-030924-00049).
 - Кросс-проверка: Средняя часть номера (напр. 030924) — это дата выдачи в формате ДДММГГ.
 - document.date: дата ВЫДАЧИ документа (в формате ГГГГ-ММ-ДД).
+- vin: VIN транспортного средства если указан в свидетельстве (17 символов).
+- hasStamp: true если виден официальный штамп/печать.
 
 📜 ДОВЕРЕННОСТЬ (POWER_OF_ATTORNEY):
 - document.number, document.date.
@@ -123,6 +128,11 @@ export const FILE_AGENT_PROMPT = `
 
 📝 ДОГОВОР (CONTRACT):
 - document.number, document.date.
+
+⚠️ ОБНАРУЖЕНИЕ ШТАМПОВ:
+- hasStamp: для КАЖДОГО документа выставляй true если видна официальная печать/штамп/подпись уполномоченного лица, иначе false.
+- Для CMR обязательна печать перевозчика (Графа 23) и получателя (Графа 24).
+- Для Инвойса обязательна подпись или печать продавца.
 
 ═══════════════════════════════════════════
 ПРАВИЛА ФОРМАТИРОВАНИЯ:
@@ -197,8 +207,10 @@ NON_RESIDENT_LEGAL (иностранная): "nonResidentLegal": { "nameRu": "Н
     "tractorRegNumber": "номер тягача",
     "tractorCountry": "KZ",
     "trailerRegNumber": "номер прицепа",
-    "trailerCountry": "KZ"
+    "trailerCountry": "KZ",
+    "vin": "17-символьный VIN (если известен)"
   },
+  "hasStamp": true,
   "driver": {
     "present": true,
     "iin": "12ЦИФР",
@@ -208,7 +220,7 @@ NON_RESIDENT_LEGAL (иностранная): "nonResidentLegal": { "nameRu": "Н
   "products": [
     {
       "tnvedCode": "6 цифр",
-      "commercialName": "ORIGINAL / ПЕРЕВОД",
+      "commercialName": "Men's sandals / Мужские сандалии",
       "grossWeight": 0,
       "quantity": 0,
       "cost": 0,
@@ -303,7 +315,8 @@ NON_RESIDENT_LEGAL (иностранная): "nonResidentLegal": { "nameRu": "Н
   },
   "vehicles": {
     "tractor": { "transportDoc": "...", "techPassport": "..." },
-    "trailer": { "transportDoc": "...", "techPassport": "..." }
+    "trailer": { "transportDoc": "...", "techPassport": "..." },
+    "vin": { "techPassport": "WVWZZZ1JZ3W386752", "vehiclePermit": "WVWZZZ1JZ3W386752" }
   },
   "finances": { "invoiceTotal": 0, "calculatedSum": 0 },
   "invoiceRef": { "cmr:CMR.jpg": "НОМЕР_ИНВОЙСА_ИЗ_ГРАФЫ_5_CMR" }
@@ -407,7 +420,8 @@ export const PER_FILE_SYSTEM_PROMPT = `
 - ОБЩАЯ СТОИМОСТЬ: Ищи "Total Amount", "USD", "EUR" или "总金额", "价税合计".
 - ВАЛЮТА: Код (USD, CNY, KZT). В китайских файлах "CNY" или "RMB".
 - УСЛОВИЯ ПОСТАВКИ (Incoterms): Ищи FOB, CPT, DAP, FCA. В китайских: "贸易术语". Рядом всегда город.
-- ТОВАРЫ: commercialName (ОРИГИНАЛ / ПЕРЕВОД), tnvedCode (6 цифр), grossWeight, quantity, cost, currencyCode
+- ТОВАРЫ: commercialName, tnvedCode (6 цифр), grossWeight, quantity, cost, currencyCode
+- ⛔ ОБЯЗАТЕЛЬНЫЙ ПЕРЕВОД: поле commercialName ВСЕГДА должно содержать русский перевод. Формат: "ОРИГИНАЛ / РУССКИЙ ПЕРЕВОД". Если название уже на русском — оставь как есть. Если на английском или китайском — добавь перевод через слэш. Примеры: "Men's sandals / Мужские сандалии", "液压泵 / Гидравлический насос", "Hydraulic pump / Гидравлический насос". Никогда не оставляй только иностранное название без перевода.
 - ⚠️ КРИТИЧЕСКИ ВАЖНО (КОЛОНКИ): В таблицах инвойсов часто колонки "G.W. (KGS)" и "AMOUNT (USD)" стоят рядом. НЕ ПЕРЕПУТАЙ ИХ!
 - СМОТРИ НА TOTAL: Чтобы понять, какая колонка — какая, посмотри на строку TOTAL/ИТОГО в самом низу таблицы.
 - Колонке "cost" (Amount) соответствует итог денег (напр. 19680 USD).
@@ -444,11 +458,15 @@ export const PER_FILE_SYSTEM_PROMPT = `
 
 🚗 ТЕХПАСПОРТ (VEHICLE_DOC):
 - tractorRegNumber (3 цифры+3 буквы), trailerRegNumber (2 цифры+3 буквы), страны.
+- vin: Идентификационный номер транспортного средства (17 символов, буквы+цифры, без пробелов). Ищи поле "VIN", "Идентификационный №", "Vin-number".
+- hasStamp: true если виден официальный штамп / печать регистрирующего органа.
 
 📜 СВИДЕТЕЛЬСТВО О ДОПУЩЕНИИ (VEHICLE_PERMIT):
 - document.number: полный номер (напр. 398 55400-030924-00049).
 - Кросс-проверка: Средняя часть номера (напр. 030924) — это дата выдачи в формате ДДММГГ.
 - document.date: дата ВЫДАЧИ документа (в формате ГГГГ-ММ-ДД).
+- vin: VIN транспортного средства если указан в свидетельстве (17 символов).
+- hasStamp: true если виден официальный штамп/печать.
 
 📜 ДОВЕРЕННОСТЬ (POWER_OF_ATTORNEY):
 - document.number, document.date.
@@ -456,6 +474,11 @@ export const PER_FILE_SYSTEM_PROMPT = `
 
 📝 ДОГОВОР (CONTRACT):
 - document.number, document.date.
+
+⚠️ ОБНАРУЖЕНИЕ ШТАМПОВ:
+- hasStamp: для КАЖДОГО документа выставляй true если видна официальная печать/штамп/подпись уполномоченного лица, иначе false.
+- Для CMR обязательна печать перевозчика (Графа 23) и получателя (Графа 24).
+- Для Инвойса обязательна подпись или печать продавца.
 
 ═══════════════════════════════════════════
 ПРАВИЛА ФОРМАТИРОВАНИЯ:
@@ -531,8 +554,10 @@ NON_RESIDENT_LEGAL (иностранная): "nonResidentLegal": { "nameRu": "Н
     "tractorRegNumber": "номер тягача",
     "tractorCountry": "KZ",
     "trailerRegNumber": "номер прицепа",
-    "trailerCountry": "KZ"
+    "trailerCountry": "KZ",
+    "vin": "17-символьный VIN (если известен)"
   },
+  "hasStamp": true,
   "driver": {
     "present": true,
     "iin": "12ЦИФР",
@@ -542,7 +567,7 @@ NON_RESIDENT_LEGAL (иностранная): "nonResidentLegal": { "nameRu": "Н
   "products": [
     {
       "tnvedCode": "6 цифр",
-      "commercialName": "ORIGINAL / ПЕРЕВОД",
+      "commercialName": "Men's sandals / Мужские сандалии",
       "grossWeight": 0,
       "quantity": 0,
       "cost": 0,

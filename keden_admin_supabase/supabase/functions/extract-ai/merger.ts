@@ -1,4 +1,42 @@
-import { normalizeName, calculateSimilarity } from "./utils.ts";
+import { normalizeName, calculateSimilarity, calculateSemanticSimilarity } from "./utils.ts";
+
+/**
+ * Паттерны шумовых предупреждений от AI, которые подавляются при мерже.
+ * Эти сообщения технически валидны для отдельного документа, но бессмысленны
+ * в контексте пакета — CMR не содержит товаров по определению, два ТС это норма и т.д.
+ */
+const NOISY_WARNING_PATTERNS: RegExp[] = [
+    // CMR/TTN не содержит детализацию товаров — это нормально
+    /товар\S* отсутству\S+ в транспортн/i,
+    /информация о товарах отсутствует/i,
+    /goods.*(not|absent|missing)/i,
+    // Тягач + прицеп — это штатная конфигурация, не аномалия
+    /два.* транспортн\S+ средств/i,
+    /тягач.*прицеп/i,
+    /prицеп.*tягач/i,
+    // Водитель — необязателен в каждом документе
+    /данные о водителе отсутству/i,
+    /driver.*(not found|absent|missing)/i,
+    // Перевозчик не всегда указан в каждом документе
+    /перевозчик не определён/i,
+    /перевозчик не определен/i,
+    /carrier.*(not found|not identified|absent)/i,
+    // Договор б/н — допустимо
+    /номер договора указан как б\/н/i,
+    /дата договора не была найдена/i,
+    /contract.*(б\/н|b\/n|not found)/i,
+    // "Установлено текущее значение по умолчанию" — технический fallback AI
+    /установлено текущее значение по умолчанию/i,
+    /default value (has been )?set/i,
+];
+
+/**
+ * Возвращает true если предупреждение от AI является шумом и не несёт ценности
+ * в контексте итогового отчёта по пакету документов.
+ */
+function isNoisyAiWarning(message: string): boolean {
+    return NOISY_WARNING_PATTERNS.some((re) => re.test(message));
+}
 
 /**
  * Типы документов, участвующие в сверке контрагентов (consignor/consignee).
@@ -126,10 +164,11 @@ function enrichMentionsFromCrossChecks(
  * 3. Если альтернативная группа БОЛЬШЕ — заменяем победителя и пишем ошибку о коррекции.
  * 4. Если просто есть расхождение (меньшинство) — только репортируем конфликт.
  */
-function crossVerifyFinalCounteragents(
+async function crossVerifyFinalCounteragents(
     merged: any,
     role: "consignor" | "consignee",
-): void {
+    googleApiKey?: string,
+): Promise<void> {
     const namesObj = merged.validation.crossChecks?.names?.[role];
     if (!namesObj) return;
 
@@ -191,7 +230,9 @@ function crossVerifyFinalCounteragents(
     const winner = topMatchesFinal ? topGroup : (freq[finalNorm] ?? topGroup);
     for (const loser of groups) {
         if (loser.normalized === winner.normalized) continue;
-        const sim = calculateSimilarity(winner.normalized, loser.normalized);
+        const sim = googleApiKey 
+            ? await calculateSemanticSimilarity(winner.normalized, loser.normalized, googleApiKey)
+            : calculateSimilarity(winner.normalized, loser.normalized);
         const loserDocs = loser.docs.map((d) => getDocLabel(d)).join(", ");
 
         // Проверяем дублирование с compareNamesAllDocuments
@@ -340,12 +381,79 @@ function buildProgrammaticCrossChecks(merged: any, mentions: any, agentResults: 
             }
         }
     }
+
+    // 7. VIN из VEHICLE_DOC и VEHICLE_PERMIT
+    // Логика: техпаспорт (VEHICLE_DOC) — авторитетный источник VIN тягача.
+    // Свидетельства о допущении (VEHICLE_PERMIT) могут быть несколько — по одному на каждое ТС
+    // (тягач + прицеп). Поэтому сравниваем только если есть VEHICLE_DOC и ровно одно VEHICLE_PERMIT
+    // с совпадающим номером тягача, либо если все VEHICLE_PERMIT дают один и тот же VIN.
+    if (!checks.vin) {
+        const vinByType: Record<string, string[]> = {};
+        for (const r of agentResults) {
+            const docType = r.document?.type || r.documents?.[0]?.type || "";
+            const vin: string = (r.vehicles?.vin || r.vin || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+            if (vin.length >= 10 && (docType === "VEHICLE_DOC" || docType === "VEHICLE_PERMIT")) {
+                if (!vinByType[docType]) vinByType[docType] = [];
+                vinByType[docType].push(vin);
+            }
+        }
+
+        const techPassportVins = vinByType["VEHICLE_DOC"] || [];
+        const permitVins = vinByType["VEHICLE_PERMIT"] || [];
+
+        // Если свидетельств несколько — берём только те, что совпадают с техпаспортом.
+        // Остальные — это свидетельства на другие ТС (прицеп и т.п.), их не сравниваем.
+        const vinSources: Record<string, string> = {};
+
+        for (const r of agentResults) {
+            const docType = r.document?.type || r.documents?.[0]?.type || "";
+            const vin: string = (r.vehicles?.vin || r.vin || "").replace(/[^A-Z0-9]/gi, "").toUpperCase();
+            if (vin.length < 10) continue;
+            const fileName = r.filename || r.documents?.[0]?.filename || "vehicle";
+
+            if (docType === "VEHICLE_DOC") {
+                // Техпаспорт всегда включаем
+                vinSources[`vehicle_doc:${fileName}`] = vin;
+            } else if (docType === "VEHICLE_PERMIT") {
+                // Свидетельство включаем только если:
+                // а) нет техпаспорта (нечем сравнивать по-другому), или
+                // б) оно совпадает с одним из VIN техпаспорта (то есть относится к тому же ТС), или
+                // в) все свидетельства дают один VIN
+                const matchesTechPassport = techPassportVins.includes(vin);
+                const allPermitsSameVin = permitVins.length > 0 && permitVins.every(v => v === permitVins[0]);
+
+                if (techPassportVins.length === 0 || matchesTechPassport || (allPermitsSameVin && permitVins[0] === vin)) {
+                    vinSources[`vehicle_permit:${fileName}`] = vin;
+                }
+                // Иначе — свидетельство на другое ТС, пропускаем
+            }
+        }
+
+        if (Object.keys(vinSources).length > 0) {
+            checks.vin = vinSources;
+        }
+    }
+
+    // 8. ШТАМПЫ: собираем hasStamp по каждому документу
+    if (!checks.stamps) {
+        const stampMap: Record<string, boolean> = {};
+        for (const r of agentResults) {
+            const docType = r.document?.type || r.documents?.[0]?.type || "";
+            if (["TRANSPORT_DOC", "INVOICE"].includes(docType) && typeof r.hasStamp === "boolean") {
+                const fileName = r.filename || r.documents?.[0]?.filename || "doc";
+                stampMap[`${docType.toLowerCase()}:${fileName}`] = r.hasStamp;
+            }
+        }
+        if (Object.keys(stampMap).length > 0) {
+            checks.stamps = stampMap;
+        }
+    }
 }
 
 /**
  * Объединяет результаты всех файл-агентов в единый объект Keden PI.
  */
-export function mergeAgentResults(agentResults: any[]) {
+export async function mergeAgentResults(agentResults: any[], googleApiKey?: string) {
     const merged: any = {
         documents: [],
         validation: { errors: [], warnings: [], crossChecks: {} },
@@ -444,7 +552,29 @@ export function mergeAgentResults(agentResults: any[]) {
         const isRelevantForCounterAgent = COUNTERAGENT_RELEVANT_DOC_TYPES.has(docType);
         if (result.consignor?.present && isRelevantForCounterAgent) mentions.consignor.push({ source: sourceLabel, docType, data: result.consignor });
         if (result.consignee?.present && isRelevantForCounterAgent) mentions.consignee.push({ source: sourceLabel, docType, data: result.consignee });
-        if (result.carrier?.present) mentions.carrier.push({ source: sourceLabel, docType, data: result.carrier });
+
+        // Перевозчик: принимаем ТОЛЬКО из транспортных документов (CMR/TTN).
+        // В инвойсах AI нередко путает отправителя с перевозчиком.
+        const isTransportDoc = ["TRANSPORT_DOC", "CMR", "TTN"].includes(docType);
+        if (result.carrier?.present && isTransportDoc) {
+            // Дополнительная проверка: имя carrier не должно совпадать с именем consignor/consignee
+            const carrierName = normalizeName(
+                result.carrier.legal?.nameRu || result.carrier.nonResidentLegal?.nameRu || ""
+            );
+            const consignorName = normalizeName(
+                result.consignor?.legal?.nameRu || result.consignor?.nonResidentLegal?.nameRu || ""
+            );
+            const consigneeName = normalizeName(
+                result.consignee?.legal?.nameRu || result.consignee?.nonResidentLegal?.nameRu || ""
+            );
+            const isSameAsParty = carrierName.length > 3 && (
+                carrierName === consignorName || carrierName === consigneeName
+            );
+            if (!isSameAsParty) {
+                mentions.carrier.push({ source: sourceLabel, docType, data: result.carrier });
+            }
+        }
+
         if (result.declarant?.present) mentions.declarant.push({ source: sourceLabel, docType, data: result.declarant });
 
         if (result.vehicles && (result.vehicles.tractorRegNumber || result.vehicles.trailerRegNumber)) {
@@ -482,9 +612,9 @@ export function mergeAgentResults(agentResults: any[]) {
         // Сохраняем кросс-валидацию от ИИ — DEEP MERGE чтобы не терять данные из разных документов
         if (result.validation) {
             if (Array.isArray(result.validation.warnings)) {
-                const nw = result.validation.warnings.map((w: any) =>
-                    typeof w === "string" ? { message: w, severity: "WARNING" } : w
-                );
+                const nw = result.validation.warnings
+                    .map((w: any) => typeof w === "string" ? { message: w, severity: "WARNING" } : w)
+                    .filter((w: any) => !isNoisyAiWarning(w.message || ""));
                 merged.validation.warnings.push(...nw);
             }
             if (Array.isArray(result.validation.errors)) {
@@ -516,21 +646,31 @@ export function mergeAgentResults(agentResults: any[]) {
             return b.products.length - a.products.length;
         });
         merged.mergedData.products = mentions.productCandidates[0].products;
+
+        // Сохраняем кандидатов для сравнения упаковочного листа с инвойсом
+        const packingCandidate = mentions.productCandidates.find((c: any) => c.docType === "PACKING_LIST");
+        const invoiceCandidate = mentions.productCandidates.find(
+            (c: any) => c.docType === "INVOICE" || c.docType === "INVOICE_EXCEL"
+        );
+        if (packingCandidate && invoiceCandidate) {
+            merged._packingCandidate = packingCandidate;
+            merged._invoiceCandidate = invoiceCandidate;
+        }
     }
 
     // Слой 2: дополняем mentions из crossChecks.names (страховка для batch-режима)
     enrichMentionsFromCrossChecks(merged, mentions, "consignor");
     enrichMentionsFromCrossChecks(merged, mentions, "consignee");
 
-    // Мерж контрагентов (majority vote по mentions)
+    // Мерж контрагентов (majority vote по mentions + семантическая сверка)
     for (const role of ["consignor", "consignee", "carrier", "declarant"]) {
-        validateAndMergeCounteragent(merged, role, mentions[role]);
+        await validateAndMergeCounteragent(merged, role, mentions[role], googleApiKey);
     }
 
     // Слой 3: верифицируем финальные имена против crossChecks.names
     // Ловим конфликты, которые не попали в mentions (batch AI вернул одно имя)
-    crossVerifyFinalCounteragents(merged, "consignor");
-    crossVerifyFinalCounteragents(merged, "consignee");
+    await crossVerifyFinalCounteragents(merged, "consignor", googleApiKey);
+    await crossVerifyFinalCounteragents(merged, "consignee", googleApiKey);
 
     // Программная сборка crossChecks из индивидуальных результатов агентов.
     // Работает как в параллельном режиме (per-file), так и как страховка для batch.
@@ -568,8 +708,8 @@ export function mergeAgentResults(agentResults: any[]) {
         merged.validation.realTechnicalSum = Math.round(actualSum * 100) / 100;
     }
 
-    // Выполняем строгую программную кросс-проверку
-    runProgrammaticCrossChecks(merged);
+    // Выполняем строгую программную кросс-проверку (с семантическим анализом имён)
+    await runProgrammaticCrossChecks(merged, googleApiKey);
 
     return merged;
 }
@@ -579,11 +719,12 @@ export function mergeAgentResults(agentResults: any[]) {
  * Если есть расхождение — указывает конкретный источник и принятое имя.
  * Используется как в crossChecks.names (данные от AI), так и в validateAndMergeCounteragent.
  */
-function compareNamesAllDocuments(
+async function compareNamesAllDocuments(
     checks: any,
     role: "consignee" | "consignor",
     merged: any,
-): void {
+    googleApiKey?: string,
+): Promise<void> {
     const namesObj = checks?.names?.[role];
     if (!namesObj) return;
 
@@ -620,8 +761,12 @@ function compareNamesAllDocuments(
     // Победитель — самое часто упоминаемое нормализованное имя
     const winner = groups[0];
     for (const loser of groups.slice(1)) {
-        const sim = calculateSimilarity(winner.normalized, loser.normalized);
-        const isTypo = sim > 0.8;
+        const sim = googleApiKey
+            ? await calculateSemanticSimilarity(winner.original, loser.original, googleApiKey)
+            : calculateSimilarity(winner.normalized, loser.normalized);
+        // Семантический порог 0.92 (эмбеддинги дают 0.95+ для опечаток),
+        // Левенштейн-порог 0.8 (как раньше)
+        const isTypo = googleApiKey ? sim > 0.92 : sim > 0.8;
         const loserDocs = loser.docs.map((d) => getDocLabel(d)).join(", ");
         merged.validation.errors.push({
             message: isTypo
@@ -632,7 +777,7 @@ function compareNamesAllDocuments(
     }
 }
 
-function runProgrammaticCrossChecks(merged: any) {
+async function runProgrammaticCrossChecks(merged: any, googleApiKey?: string) {
     const checks = merged.validation.crossChecks;
     const realSum = merged.validation.realTechnicalSum || 0;
 
@@ -702,11 +847,11 @@ function runProgrammaticCrossChecks(merged: any) {
         }
     }
 
-    // 4. ИМЕНА ПОЛУЧАТЕЛЯ: все документы, majority vote, с указанием источника
-    compareNamesAllDocuments(checks, "consignee", merged);
+    // 4. ИМЕНА ПОЛУЧАТЕЛЯ: все документы, majority vote + семантическая сверка
+    await compareNamesAllDocuments(checks, "consignee", merged, googleApiKey);
 
-    // 5. ИМЕНА ОТПРАВИТЕЛЯ: все документы, majority vote, с указанием источника
-    compareNamesAllDocuments(checks, "consignor", merged);
+    // 5. ИМЕНА ОТПРАВИТЕЛЯ: все документы, majority vote + семантическая сверка
+    await compareNamesAllDocuments(checks, "consignor", merged, googleApiKey);
 
     // 6. ТРАНСПОРТ: тягач
     if (checks.vehicles?.tractor) {
@@ -721,7 +866,8 @@ function runProgrammaticCrossChecks(merged: any) {
             } else {
                 merged.validation.errors.push({
                     message: `НОМЕР ТЯГАЧА НЕ СОВПАДАЕТ: в СМР ${t1}, в техпаспорте ${t2}`,
-                    severity: "ERROR",
+                    severity: "CRITICAL",
+                    field: "vehicles.tractor",
                 });
             }
         }
@@ -740,7 +886,8 @@ function runProgrammaticCrossChecks(merged: any) {
             } else {
                 merged.validation.errors.push({
                     message: `НОМЕР ПРИЦЕПА НЕ СОВПАДАЕТ: в СМР ${t1}, в техпаспорте ${t2}`,
-                    severity: "ERROR",
+                    severity: "CRITICAL",
+                    field: "vehicles.trailer",
                 });
             }
         }
@@ -887,6 +1034,90 @@ function runProgrammaticCrossChecks(merged: any) {
             });
         }
     }
+
+    // 15. VIN: сравнение между техпаспортом и свидетельством о допущении
+    if (checks.vin) {
+        const vinEntries = Object.entries(checks.vin)
+            .filter(([, v]) => typeof v === "string" && (v as string).length >= 10)
+            .map(([k, v]) => ({ doc: getDocLabel(k), val: String(v).toUpperCase().replace(/[^A-Z0-9]/g, "") }));
+
+        if (vinEntries.length > 1) {
+            const first = vinEntries[0].val;
+            const allMatch = vinEntries.every((e) => e.val === first);
+            if (allMatch) {
+                merged.validation.warnings.push({
+                    message: `VIN подтвержден во всех документах: ${first} ✅`,
+                    severity: "SUCCESS",
+                });
+            } else {
+                const details = vinEntries.map((e) => `${e.doc}: ${e.val}`).join(", ");
+                merged.validation.errors.push({
+                    message: `НЕСООТВЕТСТВИЕ VIN! (${details})`,
+                    severity: "CRITICAL",
+                    field: "vehicles.vin",
+                });
+            }
+        }
+    }
+
+    // 16. Упаковочный лист vs Инвойс: сравнение итогов мест и веса
+    const packingCandidate = merged._packingCandidate;
+    const invoiceCandidate = merged._invoiceCandidate;
+    if (packingCandidate && invoiceCandidate) {
+        const packTotal = packingCandidate.products.reduce((s: number, p: any) => s + (parseInt(String(p.quantity)) || 0), 0);
+        const invTotal = invoiceCandidate.products.reduce((s: number, p: any) => s + (parseInt(String(p.quantity)) || 0), 0);
+        const packWeight = packingCandidate.products.reduce((s: number, p: any) => s + (parseFloat(String(p.grossWeight)) || 0), 0);
+        const invWeight = invoiceCandidate.products.reduce((s: number, p: any) => s + (parseFloat(String(p.grossWeight)) || 0), 0);
+
+        if (packTotal > 0 && invTotal > 0) {
+            if (packTotal === invTotal) {
+                merged.validation.warnings.push({
+                    message: `Упаковочный лист: кол-во мест совпадает с инвойсом (${packTotal} мест) ✅`,
+                    severity: "SUCCESS",
+                });
+            } else {
+                merged.validation.errors.push({
+                    message: `НЕСООТВЕТСТВИЕ МЕСТ (Упак.лист/Инвойс): ${packTotal} ≠ ${invTotal}`,
+                    severity: "ERROR",
+                });
+            }
+        }
+
+        if (packWeight > 0 && invWeight > 0) {
+            const diff = Math.abs(packWeight - invWeight);
+            const pct = diff / Math.max(packWeight, invWeight);
+            if (pct < 0.01) {
+                merged.validation.warnings.push({
+                    message: `Упаковочный лист: вес совпадает с инвойсом (${packWeight} кг) ✅`,
+                    severity: "SUCCESS",
+                });
+            } else {
+                merged.validation.errors.push({
+                    message: `НЕСООТВЕТСТВИЕ ВЕСА (Упак.лист/Инвойс): ${packWeight} кг ≠ ${invWeight} кг. Разница: ${diff.toFixed(1)} кг.`,
+                    severity: "ERROR",
+                });
+            }
+        }
+    }
+
+    // 17. ШТАМПЫ: проверяем наличие печатей на обязательных документах
+    if (checks.stamps) {
+        for (const [key, hasStamp] of Object.entries(checks.stamps)) {
+            const docLabel = getDocLabel(key);
+            if (!hasStamp) {
+                merged.validation.errors.push({
+                    message: `ОТСУТСТВУЕТ ШТАМП/ПОДПИСЬ на документе: ${docLabel}. Необходима официальная печать.`,
+                    severity: "ERROR",
+                    field: "stamps",
+                });
+            } else {
+                merged.validation.warnings.push({
+                    message: `Штамп/подпись подтвержден: ${docLabel} ✅`,
+                    severity: "SUCCESS",
+                });
+            }
+        }
+    }
 }
 
 /**
@@ -894,7 +1125,7 @@ function runProgrammaticCrossChecks(merged: any) {
  * Если имена в разных документах расходятся — берётся наиболее часто встречающееся,
  * а конфликт записывается в validation.warnings с указанием конкретного источника.
  */
-function validateAndMergeCounteragent(merged: any, role: string, roleMentions: any[]) {
+async function validateAndMergeCounteragent(merged: any, role: string, roleMentions: any[], googleApiKey?: string) {
     const empty = {
         present: false,
         entityType: "LEGAL",
@@ -958,14 +1189,16 @@ function validateAndMergeCounteragent(merged: any, role: string, roleMentions: a
 
     // Репортируем конфликты — указываем конкретный источник и принятое имя
     for (const loser of groups.slice(1)) {
-        const sim = calculateSimilarity(winner.normalized, loser.normalized);
-        const isTypo = sim > 0.85;
         const loserName =
             loser.mentions[0].data.legal?.nameRu ||
             loser.mentions[0].data.nonResidentLegal?.nameRu || "";
         const winnerName =
             winner.mentions[0].data.legal?.nameRu ||
             winner.mentions[0].data.nonResidentLegal?.nameRu || "";
+        const sim = googleApiKey
+            ? await calculateSemanticSimilarity(winnerName || winner.normalized, loserName || loser.normalized, googleApiKey)
+            : calculateSimilarity(winner.normalized, loser.normalized);
+        const isTypo = googleApiKey ? sim > 0.92 : sim > 0.85;
         const loserSources = loser.mentions.map((m: any) => m.source).join(", ");
 
         merged.validation.warnings.push({
