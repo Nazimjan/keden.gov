@@ -1,4 +1,4 @@
-import { normalizeName, calculateSimilarity, calculateSemanticSimilarity } from "./utils.ts";
+import { calculateSemanticSimilarity } from "./utils.ts";
 
 /**
  * Паттерны шумовых предупреждений от AI, которые подавляются при мерже.
@@ -121,14 +121,14 @@ function enrichMentionsFromCrossChecks(
 
     const existingNorms = new Set(
         mentions[role].map((m: any) =>
-            normalizeName(m.data.legal?.nameRu || m.data.nonResidentLegal?.nameRu || "")
+            (m.data.legal?.nameRu || m.data.nonResidentLegal?.nameRu || "").trim().toUpperCase()
         ),
     );
 
     let enrichedCount = 0;
     for (const [key, name] of Object.entries(namesObj)) {
         if (typeof name !== "string" || name.length < 3) continue;
-        const norm = normalizeName(name);
+        const norm = name.trim().toUpperCase();
         if (existingNorms.has(norm)) continue;
 
         mentions[role].push({
@@ -181,7 +181,7 @@ async function crossVerifyFinalCounteragents(
         "";
     if (!finalName) return;
 
-    const finalNorm = normalizeName(finalName);
+    const finalNorm = finalName.trim().toUpperCase();
     const roleLabel = role === "consignor" ? "ОТПРАВИТЕЛЯ" : "ПОЛУЧАТЕЛЯ";
 
     // Majority vote по crossChecks.names (только релевантные типы документов)
@@ -189,7 +189,7 @@ async function crossVerifyFinalCounteragents(
     for (const [key, name] of Object.entries(namesObj)) {
         if (typeof name !== "string" || name.length < 3) continue;
         if (!isRelevantCrossCheckKey(key)) continue;
-        const norm = normalizeName(name as string);
+        const norm = (name as string).trim().toUpperCase();
         if (!norm) continue;
         if (!freq[norm]) freq[norm] = { normalized: norm, original: name as string, docs: [] };
         freq[norm].docs.push(key);
@@ -231,8 +231,8 @@ async function crossVerifyFinalCounteragents(
     for (const loser of groups) {
         if (loser.normalized === winner.normalized) continue;
         const sim = googleApiKey 
-            ? await calculateSemanticSimilarity(winner.normalized, loser.normalized, googleApiKey)
-            : calculateSimilarity(winner.normalized, loser.normalized);
+            ? await calculateSemanticSimilarity(winner.original, loser.original, googleApiKey)
+            : 0;
         const loserDocs = loser.docs.map((d) => getDocLabel(d)).join(", ");
 
         // Проверяем дублирование с compareNamesAllDocuments
@@ -241,9 +241,10 @@ async function crossVerifyFinalCounteragents(
         );
         if (alreadyReported) continue;
 
+        const isTypo = googleApiKey && sim > 0.85;
         merged.validation.errors.push({
             field: `${role}.name`,
-            message: sim > 0.8
+            message: isTypo
                 ? `ОПЕЧАТКА У ${roleLabel}: «${loser.original}» (в ${loserDocs}) — принято «${winner.original}» (большинство документов).`
                 : `КОНФЛИКТ У ${roleLabel}: «${loser.original}» (в ${loserDocs}) — принято «${winner.original}» (большинство документов).`,
             severity: "ERROR",
@@ -558,15 +559,9 @@ export async function mergeAgentResults(agentResults: any[], googleApiKey?: stri
         const isTransportDoc = ["TRANSPORT_DOC", "CMR", "TTN"].includes(docType);
         if (result.carrier?.present && isTransportDoc) {
             // Дополнительная проверка: имя carrier не должно совпадать с именем consignor/consignee
-            const carrierName = normalizeName(
-                result.carrier.legal?.nameRu || result.carrier.nonResidentLegal?.nameRu || ""
-            );
-            const consignorName = normalizeName(
-                result.consignor?.legal?.nameRu || result.consignor?.nonResidentLegal?.nameRu || ""
-            );
-            const consigneeName = normalizeName(
-                result.consignee?.legal?.nameRu || result.consignee?.nonResidentLegal?.nameRu || ""
-            );
+            const carrierName = (result.carrier.legal?.nameRu || result.carrier.nonResidentLegal?.nameRu || "").trim().toUpperCase();
+            const consignorName = (result.consignor?.legal?.nameRu || result.consignor?.nonResidentLegal?.nameRu || "").trim().toUpperCase();
+            const consigneeName = (result.consignee?.legal?.nameRu || result.consignee?.nonResidentLegal?.nameRu || "").trim().toUpperCase();
             const isSameAsParty = carrierName.length > 3 && (
                 carrierName === consignorName || carrierName === consigneeName
             );
@@ -632,12 +627,11 @@ export async function mergeAgentResults(agentResults: any[], googleApiKey?: stri
         }
     }
 
+    // Слой 1.5: Схлопываем дубликаты в списке документов (Графа 44)
+    await validateAndMergeDocuments(merged, googleApiKey);
+
     // Мерж стран
-    if (mentions.countries.length > 0) {
-        const best = mentions.countries.find((m: any) => m.source.toLowerCase().includes("cmr")) || mentions.countries[0];
-        merged.mergedData.countries.departureCountry = (best.data.departureCountry || "").toUpperCase();
-        merged.mergedData.countries.destinationCountry = (best.data.destinationCountry || "").toUpperCase();
-    }
+    handleCountries(merged, mentions.countries);
 
     // Мерж товаров (выбор лучшего источника)
     if (mentions.productCandidates.length > 0) {
@@ -677,9 +671,9 @@ export async function mergeAgentResults(agentResults: any[], googleApiKey?: stri
     // Заполняет только пустые ключи — не перезаписывает данные от AI.
     buildProgrammaticCrossChecks(merged, mentions, agentResults);
 
-    // Транспорт и водитель
-    handleVehicles(merged, mentions.vehicles);
-    handleDriver(merged, mentions.driver);
+    // Транспорт и водитель (анализ через эмбеддинги)
+    await handleVehicles(merged, mentions.vehicles, googleApiKey);
+    await handleDriver(merged, mentions.driver, googleApiKey);
 
     // Авторитетные итоги документов (приоритет: CMR/TRANSPORT_DOC > TTN > INVOICE)
     const docTotalPriority: Record<string, number> = {
@@ -733,7 +727,7 @@ async function compareNamesAllDocuments(
         .map(([doc, name]) => ({
             doc,
             original: name as string,
-            normalized: normalizeName(name as string),
+            normalized: (name as string).trim().toUpperCase(),
         }));
 
     if (entries.length <= 1) return;
@@ -763,10 +757,10 @@ async function compareNamesAllDocuments(
     for (const loser of groups.slice(1)) {
         const sim = googleApiKey
             ? await calculateSemanticSimilarity(winner.original, loser.original, googleApiKey)
-            : calculateSimilarity(winner.normalized, loser.normalized);
+            : 0;
         // Семантический порог 0.92 (эмбеддинги дают 0.95+ для опечаток),
         // Левенштейн-порог 0.8 (как раньше)
-        const isTypo = googleApiKey ? sim > 0.92 : sim > 0.8;
+        const isTypo = googleApiKey && sim > 0.85;
         const loserDocs = loser.docs.map((d) => getDocLabel(d)).join(", ");
         merged.validation.errors.push({
             message: isTypo
@@ -1159,10 +1153,9 @@ async function validateAndMergeCounteragent(merged: any, role: string, roleMenti
     // Majority vote: группируем упоминания по нормализованному имени
     const freq: Record<string, { normalized: string; mentions: any[] }> = {};
     for (const mention of roleMentions) {
-        const raw = (mention.data.legal?.nameRu || mention.data.nonResidentLegal?.nameRu || "")
+        const norm = (mention.data.legal?.nameRu || mention.data.nonResidentLegal?.nameRu || "")
             .toUpperCase()
             .trim();
-        const norm = normalizeName(raw);
         const key = norm || "__EMPTY__";
         if (!freq[key]) freq[key] = { normalized: norm, mentions: [] };
         freq[key].mentions.push(mention);
@@ -1196,9 +1189,9 @@ async function validateAndMergeCounteragent(merged: any, role: string, roleMenti
             winner.mentions[0].data.legal?.nameRu ||
             winner.mentions[0].data.nonResidentLegal?.nameRu || "";
         const sim = googleApiKey
-            ? await calculateSemanticSimilarity(winnerName || winner.normalized, loserName || loser.normalized, googleApiKey)
-            : calculateSimilarity(winner.normalized, loser.normalized);
-        const isTypo = googleApiKey ? sim > 0.92 : sim > 0.85;
+            ? await calculateSemanticSimilarity(winnerName, loserName, googleApiKey)
+            : 0;
+        const isTypo = googleApiKey && sim > 0.85;
         const loserSources = loser.mentions.map((m: any) => m.source).join(", ");
 
         merged.validation.warnings.push({
@@ -1221,14 +1214,307 @@ async function validateAndMergeCounteragent(merged: any, role: string, roleMenti
     };
 }
 
-function handleVehicles(merged: any, mentions: any[]) {
-    if (!mentions.length) return;
-    const best = mentions.find((m) => m.docType === "VEHICLE_DOC") || mentions[0];
-    merged.mergedData.vehicles = { ...best.data };
+/**
+ * Схлопывает дубликаты документов в 44 графе (merged.documents) через эмбеддинги.
+ * Сравнивает комбинацию "тип + номер + дата" семантически.
+ */
+async function validateAndMergeDocuments(merged: any, googleApiKey?: string) {
+    const originalDocs = merged.documents as any[];
+    if (originalDocs.length <= 1) return;
+
+    const uniqueDocs: any[] = [];
+    const TYPE_PRIORITY: Record<string, number> = {
+        "INVOICE": 10,
+        "TRANSPORT_DOC": 10,
+        "VEHICLE_DOC": 10,
+        "VEHICLE_PERMIT": 10,
+        "DRIVER_ID": 10,
+        "REGISTRY": 10,
+        "CONTRACT": 5,
+        "POWER_OF_ATTORNEY": 5,
+        "PACKING_LIST": 5,
+        "OTHER": 1
+    };
+    
+    for (const doc of originalDocs) {
+        const docString = `${doc.type || ""} ${doc.number || ""} ${doc.date || ""}`.trim();
+        if (!docString || docString.length < 3) continue;
+
+        let isDuplicate = false;
+        for (const existing of uniqueDocs) {
+            const existingString = `${existing.type || ""} ${existing.number || ""} ${existing.date || ""}`.trim();
+            
+            // Точное совпадение (быстрее)
+            if (docString.toUpperCase() === existingString.toUpperCase()) {
+                isDuplicate = true;
+                break;
+            }
+
+            // Кросс-валидация номеров (если у обоих есть номер и они разные - НЕ мержим)
+            const numA = (doc.number || "").toString().replace(/[^A-Z0-9]/gi, "");
+            const numB = (existing.number || "").toString().replace(/[^A-Z0-9]/gi, "");
+            
+            if (numA && numB && numA !== numB && numA.length > 3 && numB.length > 3) {
+                // Если номера явно разные, пропускаем семантическую проверку
+                continue;
+            }
+
+            // Семантическое совпадение через эмбеддинги
+            if (googleApiKey) {
+                const sim = await calculateSemanticSimilarity(docString, existingString, googleApiKey);
+                
+                // Порог 0.99 для документов (0.985 был слишком низок для длинных номеров)
+                if (sim > 0.992) {
+                    console.log(`[Similarity Doc44] "${docString}" vs "${existingString}" = ${sim.toFixed(4)}`);
+                    isDuplicate = true;
+                    
+                    // Обогащаем существующий документ
+                    const newPriority = TYPE_PRIORITY[doc.type] || 0;
+                    const oldPriority = TYPE_PRIORITY[existing.type] || 0;
+
+                    // Если новый тип важнее (напр. VEHICLE_PERMIT вместо OTHER), берем его
+                    if (newPriority > oldPriority) {
+                        existing.type = doc.type;
+                    }
+
+                    // Берем более полный номер/дату
+                    if ((doc.number || "").length > (existing.number || "").length) {
+                        existing.number = doc.number;
+                    }
+                    if ((doc.date || "").length > (existing.date || "").length) {
+                        existing.date = doc.date;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if (!isDuplicate) {
+            uniqueDocs.push(doc);
+        }
+    }
+
+    // Финальная "починка" данных для специфических типов
+    for (const doc of uniqueDocs) {
+        if (doc.type === "VEHICLE_PERMIT" && doc.number) {
+            // Пытаемся вытащить дату из номера формата 398 55400-231025-004766
+            // Обычно это блок из 6 цифр (ДДММГГ)
+            const dateMatch = doc.number.match(/(\d{6})/); 
+            if (dateMatch && dateMatch[1]) {
+                const part = dateMatch[1];
+                const d = part.substring(0, 2);
+                const m = part.substring(2, 4);
+                const yPart = part.substring(4, 6);
+                
+                // Для ПИ актуальны только 20xx годы
+                const year = 2000 + parseInt(yPart);
+                const day = parseInt(d);
+                const month = parseInt(m);
+
+                // Если дата валидная (231025 -> 23.10.2025)
+                if (day > 0 && day <= 31 && month > 0 && month <= 12 && year > 2020) {
+                    const derivedDate = `${year}-${m}-${d}`;
+                    if (doc.date !== derivedDate) {
+                        console.log(`[RepairDoc] Исправлена дата для ${doc.number}: ${doc.date} -> ${derivedDate}`);
+                        doc.date = derivedDate;
+                    }
+                }
+            }
+        }
+    }
+
+    if (originalDocs.length !== uniqueDocs.length) {
+        console.log(`[mergeDocs] Схлопнуто дубликатов документов: ${originalDocs.length} -> ${uniqueDocs.length}`);
+    }
+    merged.documents = uniqueDocs;
 }
 
-function handleDriver(merged: any, mentions: any[]) {
+async function handleVehicles(merged: any, mentions: any[], googleApiKey?: string) {
     if (!mentions.length) return;
-    const best = mentions.find((m) => m.docType === "DRIVER_ID") || mentions[0];
-    merged.mergedData.driver = { ...best.data, present: true };
+    
+    // Итоговый объект (поля должны соответствовать initialMerged)
+    const results: any = {
+        tractorRegNumber: "",
+        tractorCountry: "",
+        trailerRegNumber: "",
+        trailerCountry: "",
+        vin: ""
+    };
+
+    // 1. Обработка идентификаторов (номера и VIN)
+    const idFields = ["tractorRegNumber", "trailerRegNumber", "vin"] as const;
+    for (const field of idFields) {
+        const freq: Record<string, { original: string, count: number, docs: string[] }> = {};
+        for (const m of mentions) {
+            const val = m.data[field];
+            if (!val || typeof val !== 'string') continue;
+            const norm = val.replace(/[^A-Z0-9]/gi, "").toUpperCase();
+            if (!freq[norm]) freq[norm] = { original: val, count: 0, docs: [] };
+            freq[norm].count++;
+            freq[norm].docs.push(getDocLabel(m.source));
+        }
+
+        const sorted = Object.values(freq).sort((a,b) => b.count - a.count);
+        if (sorted.length === 0) continue;
+
+        const winner = sorted[0];
+        results[field] = winner.original;
+
+        // Если есть конфликты - проверяем семантику
+        if (sorted.length > 1 && googleApiKey) {
+            for (const loser of sorted.slice(1)) {
+                const sim = await calculateSemanticSimilarity(winner.original, loser.original, googleApiKey);
+                if (sim < 0.95) {
+                    merged.validation.warnings.push({
+                        field: `vehicles.${field}`,
+                        message: `⚠️ КОНФЛИКТ: В одних файлах ${field} «${winner.original}» (${winner.docs.join(", ")}), в других — «${loser.original}» (${loser.docs.join(", ")}).`,
+                        severity: "WARNING"
+                    });
+                }
+            }
+        }
+    }
+
+    // 2. Обработка стран (tractorCountry, trailerCountry)
+    const countryFields = ["tractorCountry", "trailerCountry"] as const;
+    for (const field of countryFields) {
+        const freq: Record<string, { val: string, count: number, type: string }> = {};
+        for (const m of mentions) {
+            // Поддежка и tractorCountry и tractorCountryCode (на всякий случай)
+            const val = m.data[field] || m.data[field + "Code"];
+            if (!val || typeof val !== 'string') continue;
+            const norm = val.trim().toUpperCase();
+            if (!freq[norm]) freq[norm] = { val, count: 0, type: m.docType };
+            freq[norm].count++;
+        }
+
+        const sorted = Object.values(freq).sort((a, b) => {
+            // Приоритет: Техпаспорт > CMR/Трансп.док > ТТН
+            const p: Record<string, number> = { "VEHICLE_DOC": 3, "CMR": 2, "TRANSPORT_DOC": 2, "TTN": 1 };
+            const prioA = p[a.type] || 0;
+            const prioB = p[b.type] || 0;
+            if (prioA !== prioB) return prioB - prioA;
+            return b.count - a.count;
+        });
+
+        if (sorted.length > 0) {
+            results[field] = sorted[0].val;
+        }
+    }
+
+    merged.mergedData.vehicles = results;
 }
+
+async function handleDriver(merged: any, mentions: any[], googleApiKey?: string) {
+    if (!mentions.length) return;
+
+    // Группируем по нормализованному имени
+    const freq: Record<string, { original: any[], count: number, docs: string[] }> = {};
+    for (const m of mentions) {
+        const name = `${m.data.lastName || ""} ${m.data.firstName || ""}`.trim();
+        if (!name) continue;
+        const norm = name.toUpperCase();
+        if (!freq[norm]) freq[norm] = { original: [], count: 0, docs: [] };
+        freq[norm].original.push(m.data);
+        freq[norm].count++;
+        freq[norm].docs.push(getDocLabel(m.source));
+    }
+
+    const sortedGroups = Object.values(freq).sort((a,b) => b.count - a.count);
+    if (!sortedGroups.length) {
+        merged.mergedData.driver = { ...mentions[0].data, present: true };
+        return;
+    }
+
+    const winnerGroup = sortedGroups[0];
+    
+    // Внутри группы победителя выбираем лучший вариант (где больше данных, например есть ИИН)
+    const bestInWinner = winnerGroup.original.sort((a, b) => {
+        const scoreA = (a.iin ? 5 : 0) + (a.firstName ? 1 : 0) + (a.lastName ? 1 : 0);
+        const scoreB = (b.iin ? 5 : 0) + (b.firstName ? 1 : 0) + (b.lastName ? 1 : 0);
+        return scoreB - scoreA;
+    })[0];
+
+    merged.mergedData.driver = { ...bestInWinner, present: true };
+
+    // Проверка конфликтов имен
+    if (sortedGroups.length > 1 && googleApiKey) {
+        const winnerName = `${bestInWinner.lastName || ""} ${bestInWinner.firstName || ""}`.trim();
+        for (const loser of sortedGroups.slice(1)) {
+            const loserData = loser.original[0];
+            const loserName = `${loserData.lastName || ""} ${loserData.firstName || ""}`.trim();
+            const sim = await calculateSemanticSimilarity(winnerName, loserName, googleApiKey);
+            if (sim < 0.85) {
+                merged.validation.warnings.push({
+                    field: "driver.name",
+                    message: `⚠️ КОНФЛИКТ ИМЕНИ ВОДИТЕЛЯ: «${winnerName}» (${winnerGroup.docs.join(", ")}) vs «${loserName}» (${loser.docs.join(", ")}).`,
+                    severity: "WARNING"
+                });
+            }
+        }
+    }
+
+    // Проверка конфликтов ИИН внутри всех упоминаний (даже если имена похожи)
+    const iins = mentions.map(m => m.data.iin).filter(v => v && v.length === 12);
+    if (iins.length > 1) {
+        const iinFreq: Record<string, number> = {};
+        for(const i of iins) iinFreq[i] = (iinFreq[i] || 0) + 1;
+        const distinctIins = Object.keys(iinFreq);
+        if (distinctIins.length > 1) {
+            const winnerIin = merged.mergedData.driver.iin;
+            const otherIins = distinctIins.filter(i => i !== winnerIin);
+            if (otherIins.length > 0) {
+                merged.validation.warnings.push({
+                    field: "driver.iin",
+                    message: `⚠️ КОНФЛИКТ ИИН ВОДИТЕЛЯ: Обнаружено несколько вариантов ИИН (${distinctIins.join(", ")}). Принят наиболее частый: ${winnerIin}.`,
+                    severity: "WARNING"
+                });
+            }
+        }
+    }
+}
+
+function handleCountries(merged: any, mentions: any[]) {
+    if (!mentions.length) {
+        // Fallback: пробуем взять из стран контрагентов
+        if (merged.mergedData.counteragents.consignor?.nonResidentLegal?.countryCode) {
+            merged.mergedData.countries.departureCountry = merged.mergedData.counteragents.consignor.nonResidentLegal.countryCode;
+        }
+        if (merged.mergedData.counteragents.consignee?.legal?.bin?.startsWith("KZ") || merged.mergedData.counteragents.consignee?.legal?.bin?.length === 12) {
+             // Очень грубая прикидка для KZ
+             // merged.mergedData.countries.destinationCountry = "KZ";
+        }
+        return;
+    }
+
+    // Приоритет: CMR/TRANSPORT_DOC
+    const best = mentions.find((m: any) => m.source.toLowerCase().includes("cmr") || m.docType === "TRANSPORT_DOC") || mentions[0];
+    
+    let dep = (best.data.departureCountry || "").toUpperCase();
+    let dest = (best.data.destinationCountry || "").toUpperCase();
+
+    // Если CMR говорит одинаковые страны (глюк), а у нас есть другие варианты - проверяем большинство
+    if (dep === dest && mentions.length > 1) {
+        const depFreq: Record<string, number> = {};
+        const destFreq: Record<string, number> = {};
+        for(const m of mentions) {
+            if(m.data.departureCountry) depFreq[m.data.departureCountry] = (depFreq[m.data.departureCountry] || 0) + 1;
+            if(m.data.destinationCountry) destFreq[m.data.destinationCountry] = (destFreq[m.data.destinationCountry] || 0) + 1;
+        }
+        const mostFreqDep = Object.entries(depFreq).sort((a,b) => b[1] - a[1])[0];
+        const mostFreqDest = Object.entries(destFreq).sort((a,b) => b[1] - a[1])[0];
+        if (mostFreqDep && mostFreqDep[0] !== mostFreqDest?.[0]) {
+            dep = mostFreqDep[0];
+            dest = mostFreqDest?.[0] || dest;
+        }
+    }
+
+    // Итоговый фикс по контрагентам
+    if (!dep && merged.mergedData.counteragents.consignor?.nonResidentLegal?.countryCode) {
+        dep = merged.mergedData.counteragents.consignor.nonResidentLegal.countryCode;
+    }
+
+    merged.mergedData.countries.departureCountry = dep.toUpperCase();
+    merged.mergedData.countries.destinationCountry = dest.toUpperCase();
+}
+
