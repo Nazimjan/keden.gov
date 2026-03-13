@@ -80,7 +80,7 @@ async function checkAdminAuth() {
         return {
             allowed: true,
             user: { ...user, hasSubscription },
-            userInfo
+            userInfo: { ...userInfo, token: userInfo.token }
         };
     } catch (e) {
         console.error('[Supabase Auth] check failed:', e);
@@ -94,11 +94,16 @@ async function checkAdminAuth() {
 async function sendAdminLog(actionType, description = '') {
     if (!currentUserInfo) return;
     try {
-        await supabaseClient.from('logs').insert({
-            user_iin: currentUserInfo.iin,
-            user_fio: currentUserInfo.fio,
-            action_type: actionType,
-            description
+        // Also send to background for secure logging via Edge Function
+        chrome.runtime.sendMessage({
+            action: 'LOG_ACTION',
+            payload: {
+                iin: currentUserInfo.iin,
+                fio: currentUserInfo.fio,
+                token: currentUserInfo.token,
+                action_type: actionType,
+                description
+            }
         });
     } catch (e) {
         console.warn('[Keden] sendAdminLog: failed to write log', e.message);
@@ -447,6 +452,7 @@ document.getElementById('startBtn').onclick = async () => {
                 preParsedDocuments: preParsedDocs,
                 iin: currentUserInfo ? currentUserInfo.iin : '000000000000',
                 fio: currentUserInfo ? currentUserInfo.fio : 'Пользователь',
+                token: currentUserInfo ? currentUserInfo.token : null,
                 targetTabId: tab ? tab.id : null
             }
         });

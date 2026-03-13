@@ -61,7 +61,7 @@ export const api = {
 
         let query = supabase
             .from('logs')
-            .select('*', { count: 'exact' })
+            .select('*, users!user_iin(fio)', { count: 'exact' })
             .order('created_at', { ascending: false })
             .range(from, to);
 
@@ -85,7 +85,7 @@ export const api = {
         const { error } = await supabase
             .from('logs')
             .delete()
-            .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete everything
+            .neq('id', 0); // Delete everything where id is not 0
         if (error) throw error;
         return true;
     },
@@ -106,7 +106,7 @@ export const api = {
                 .or(`subscription_end.gt.${new Date().toISOString()},credits.gt.0`),
             supabase.from('logs').select('*', { count: 'exact', head: true })
                 .gt('created_at', new Date(new Date().setHours(0, 0, 0, 0)).toISOString()),
-            supabase.from('logs').select('*').order('created_at', { ascending: false }).limit(10)
+            supabase.from('logs').select('*, users!user_iin(fio)').order('created_at', { ascending: false }).limit(10)
         ]);
 
         return {

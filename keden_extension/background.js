@@ -84,10 +84,10 @@ let currentAbortController = null;
  */
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'START_EXTRACTION') {
-        const { documents, iin, fio, targetTabId, preParsedDocuments = [] } = request.payload;
+        const { documents, iin, fio, targetTabId, preParsedDocuments = [], token = null } = request.payload;
 
         // Запускаем процесс асинхронно
-        handleExtraction(documents, iin, fio, targetTabId, preParsedDocuments).catch(err => {
+        handleExtraction(documents, iin, fio, targetTabId, preParsedDocuments, token).catch(err => {
             if (err.name === 'AbortError') {
                 console.log('[Background] Extraction aborted by user');
                 return;
@@ -113,7 +113,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'CHECK_ACCESS') {
         const { iin, fio } = request.payload;
         supabaseClient.functions.invoke('extract-ai', {
-            body: { action: 'check_access', iin, fio }
+            body: { action: 'check_access', iin, fio },
+            headers: request.payload.token ? { Authorization: `Bearer ${request.payload.token}` } : {}
         })
             .then(res => {
                 if (res.error) throw new Error(res.error.message);
@@ -126,7 +127,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'LOG_ACTION') {
         const { iin, fio, action_type, description } = request.payload;
         supabaseClient.functions.invoke('extract-ai', {
-            body: { action: 'log', iin, fio, action_type, description }
+            body: { action: 'log', iin, fio, action_type, description },
+            headers: request.payload.token ? { Authorization: `Bearer ${request.payload.token}` } : {}
         })
             .then(res => sendResponse({ success: true, ...res.data }))
             .catch(err => sendResponse({ success: false, error: err.message }));
@@ -134,8 +136,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
 
     if (request.action === 'ANALYZE_SINGLE') {
-        const { document, iin, fio } = request.payload;
-        handleSingleExtraction(document, iin, fio)
+        const { document, iin, fio, token } = request.payload;
+        handleSingleExtraction(document, iin, fio, token)
             .then(result => sendResponse({ success: true, result }))
             .catch(err => sendResponse({ success: false, error: err.message }));
         return true;
@@ -147,7 +149,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         // But gemini.js might be sending parts directly.
         // For simplicity, let's just use the existing START_EXTRACTION logic if we can,
         // or a similar one here if it only expects result without state update.
-        handleExtraction(fileParts.map((p, i) => ({ parts: Array.isArray(p) ? p : [p], fileName: fileNames[i] })), iin, fio)
+        handleExtraction(fileParts.map((p, i) => ({ parts: Array.isArray(p) ? p : [p], fileName: fileNames[i] })), iin, fio, null, [], request.payload.token)
             .then(finalResult => sendResponse({ success: true, result: finalResult.mergedData }))
             .catch(err => sendResponse({ success: false, error: err.message }));
         return true;
@@ -185,7 +187,8 @@ async function handleSingleExtraction(doc, iin, fio) {
     }
 
     const { data: resultData, error: funcError } = await supabaseClient.functions.invoke('extract-ai', {
-        body: { storagePaths, iin, fio, originalFileNames }
+        body: { storagePaths, iin, fio, originalFileNames },
+        headers: token ? { Authorization: `Bearer ${token}` } : {}
     });
     if (funcError) throw new Error(funcError.message);
 
@@ -233,7 +236,7 @@ async function uploadWithRetry(fileName, blobData, mimeType, originalName, maxRe
 /**
  * Основная логика: Загрузка в Storage + Вызов Edge Function
  */
-async function handleExtraction(documents, iin, fio, targetTabId, preParsedDocuments = []) {
+async function handleExtraction(documents, iin, fio, targetTabId, preParsedDocuments = [], token = null) {
     await updateState({
         status: 'PROCESSING',
         progressMessage: 'Загрузка документов в хранилище...',
@@ -286,7 +289,8 @@ async function handleExtraction(documents, iin, fio, targetTabId, preParsedDocum
 
         // 2. Вызов Edge Function — передаём originalFileNames чтобы ИИ мог вернуть их в документах
         const { data: resultData, error: funcError } = await supabaseClient.functions.invoke('extract-ai', {
-            body: { storagePaths, iin, fio, originalFileNames, preParsedDocuments }
+            body: { storagePaths, iin, fio, originalFileNames, preParsedDocuments },
+            headers: token ? { Authorization: `Bearer ${token}` } : {}
         });
 
         if (funcError) {

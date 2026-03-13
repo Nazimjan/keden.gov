@@ -134,7 +134,7 @@ async function checkExtensionAccess() {
         return new Promise((resolve) => {
             chrome.runtime.sendMessage({
                 action: 'CHECK_ACCESS',
-                payload: { iin: userInfo.iin, fio: userInfo.fio }
+                payload: { iin: userInfo.iin, fio: userInfo.fio, token: userInfo.token }
             }, (response) => {
                 if (chrome.runtime.lastError) {
                     resolve({ allowed: true, message: 'Ошибка связи с фоновым скриптом. Режим офлайн.', userInfo, offline: true });
@@ -166,6 +166,7 @@ async function logExtensionAction(actionType, description = '') {
             payload: {
                 iin: userInfo.iin,
                 fio: userInfo.fio,
+                token: userInfo.token,
                 action_type: actionType,
                 description: description
             }

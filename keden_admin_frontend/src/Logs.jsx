@@ -1,156 +1,133 @@
 import React, { useState, useEffect } from 'react';
 import { api } from './api.js';
+import { formatActionType, formatDescription } from './utils.js';
 
 function Logs() {
     const [logs, setLogs] = useState([]);
-    const [loading, setLoading] = useState(true);
+    const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
-    const [total, setTotal] = useState(0);
-    const [filterIin, setFilterIin] = useState('');
+    const [iin, setIin] = useState('');
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         loadLogs();
-    }, [page, filterIin]);
+    }, [page]);
 
     const loadLogs = async () => {
         setLoading(true);
         try {
-            const data = await api.getLogs(page, 30, filterIin);
+            const data = await api.getLogs(page, 50, iin);
             setLogs(data.items);
-            setTotalPages(data.pages);
             setTotal(data.total);
+            setTotalPages(data.pages);
         } catch (err) {
-            console.error('Logs load error:', err);
+            console.error(err);
         } finally {
             setLoading(false);
         }
     };
 
-    const formatDate = (date) => {
-        if (!date) return '—';
-        const d = new Date(date + 'Z');
-        return d.toLocaleString('ru-RU', {
-            day: '2-digit',
-            month: '2-digit',
-            year: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit'
-        });
+    const handleSearch = (e) => {
+        e.preventDefault();
+        setPage(1);
+        loadLogs();
     };
 
-    const actionColors = {
-        'FILL_PI': 'badge-success',
-        'LOGIN': 'badge-info',
-        'AUTH_CHECK': 'badge-info',
-        'ANALYZE': 'badge-info',
-        'ERROR': 'badge-danger',
-    };
-
-    const getActionBadgeClass = (action) => {
-        return actionColors[action] || 'badge-info';
+    const handleClear = async () => {
+        if (window.confirm('ОЧИСТИТЬ ВСЕ ЖУРНАЛЫ МИССИЙ? ЭТО ДЕЙСТВИЕ НЕОБРАТИМО.')) {
+            try {
+                await api.clearLogs();
+                loadLogs();
+            } catch (err) {
+                alert(err.message);
+            }
+        }
     };
 
     return (
-        <div>
-            <div className="page-header">
-                <h2>📋 Журнал действий</h2>
-                <div className="search-bar">
-                    <span className="search-icon">🔍</span>
-                    <input
-                        type="text"
-                        placeholder="Фильтр по ИИН..."
-                        value={filterIin}
-                        onChange={(e) => { setFilterIin(e.target.value); setPage(1); }}
-                    />
+        <div className="reveal">
+            <header className="page-header">
+                <div>
+                  <span className="mono" style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>ИСТОРИЯ АКТИВНОСТИ</span>
+                  <h2>ЖУРНАЛ ДЕЙСТВИЙ</h2>
                 </div>
+                <button className="btn btn-danger" onClick={handleClear}>💣 ОЧИСТКА</button>
+            </header>
+
+            <div className="card" style={{ marginBottom: '24px' }}>
+              <form onSubmit={handleSearch} className="card-body" style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', padding: '20px 32px' }}>
+                  <div className="form-group" style={{ marginBottom: 0, flex: 1 }}>
+                      <label>ФИЛЬТР ПО ИИН ОПЕРАТИВНИКА</label>
+                      <input
+                          type="text"
+                          value={iin}
+                          onChange={e => setIin(e.target.value)}
+                          placeholder="ПОИСК ИИН..."
+                      />
+                  </div>
+                  <button type="submit" className="btn btn-outline">ИСКАТЬ</button>
+              </form>
             </div>
 
             <div className="card">
                 <div className="card-header">
-                    <h3>Всего записей: {total}</h3>
-                    <div style={{ display: 'flex', gap: '10px' }}>
-                        <button className="btn btn-outline btn-sm" onClick={loadLogs}>
-                            🔄 Обновить
-                        </button>
-                        <button className="btn btn-danger btn-sm" id="clearLogsBtn" onClick={async (e) => {
-                            const btn = e.target;
-                            if (btn.innerText.includes('Точно?')) {
-                                try {
-                                    btn.innerText = '🗑️ Очистить журнал';
-                                    await api.clearLogs();
-                                    loadLogs();
-                                } catch (err) {
-                                    alert('Ошибка очистки: ' + err.message);
-                                }
-                            } else {
-                                const oldText = btn.innerText;
-                                btn.innerText = '❓ Точно? (Нажмите еще раз)';
-                                setTimeout(() => {
-                                    if (btn.innerText.includes('Точно?')) btn.innerText = oldText;
-                                }, 3000);
-                            }
-                        }}>
-                            🗑️ Очистить журнал
-                        </button>
-                    </div>
+                  <h3 className="mono" style={{ fontSize: '0.8rem' }}>Найдено записей: {total}</h3>
+                  <div className="admin-actions">
+                    <button 
+                      className="btn btn-sm btn-outline" 
+                      onClick={() => setPage(p => Math.max(1, p - 1))}
+                      disabled={page === 1}
+                    >◀ НАЗАД</button>
+                    <span className="mono" style={{ alignSelf: 'center', fontSize: '0.8rem' }}>СТРАНИЦА {page} / {totalPages}</span>
+                    <button 
+                      className="btn btn-sm btn-outline" 
+                      onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                      disabled={page === totalPages}
+                    >ДАЛЕЕ ▶</button>
+                  </div>
                 </div>
-                <div className="card-body">
-                    {loading ? (
-                        <div className="loading-center"><div className="spinner" /></div>
-                    ) : logs.length === 0 ? (
-                        <div className="empty-state">
-                            <div className="icon">📭</div>
-                            <p>Логи пусты</p>
-                        </div>
-                    ) : (
-                        <table className="data-table">
-                            <thead>
-                                <tr>
-                                    <th>#</th>
-                                    <th>ИИН</th>
-                                    <th>ФИО</th>
-                                    <th>Действие</th>
-                                    <th>Описание</th>
-                                    <th>IP</th>
-                                    <th>Время</th>
+                <div className="card-body" style={{ padding: '0' }}>
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>ВРЕМЯ</th>
+                                <th>ОПЕРАТИВНИК</th>
+                                <th>ОПЕРАЦИЯ</th>
+                                <th>ОТВЕТ СИСТЕМЫ</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {loading ? (
+                              <tr>
+                                <td colSpan="4" style={{ textAlign: 'center', padding: '100px' }} className="mono">
+                                  ЗАГРУЗКА ДАННЫХ...
+                                </td>
+                              </tr>
+                            ) : logs.map(log => (
+                                <tr key={log.id}>
+                                    <td className="mono" style={{ fontSize: '0.75rem' }}>
+                                      {new Date(log.created_at).toLocaleString()}
+                                    </td>
+                                    <td className="mono" style={{ color: 'var(--text-accent)' }}>
+                                        <div style={{ fontWeight: 'bold' }}>{log.user_iin}</div>
+                                        <div style={{ fontSize: '0.65rem', color: 'var(--text-muted)' }}>
+                                            {log.users?.fio || log.user_fio || 'АНОНИМ'}
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span className="badge badge-outline" style={{ fontSize: '0.6rem', border: '1px solid var(--border-mid)' }}>
+                                            {formatActionType(log.action_type)}
+                                        </span>
+                                    </td>
+                                    <td style={{ fontSize: '0.8rem', color: 'var(--text-muted)', maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={log.description}>
+                                      {formatDescription(log.description, log.action_type)}
+                                    </td>
                                 </tr>
-                            </thead>
-                            <tbody>
-                                {logs.map((log) => (
-                                    <tr key={log.id}>
-                                        <td style={{ color: 'var(--text-muted)' }}>{log.id}</td>
-                                        <td style={{ fontFamily: 'monospace' }}>{log.user_iin}</td>
-                                        <td>{log.user_fio || '—'}</td>
-                                        <td>
-                                            <span className={`badge ${getActionBadgeClass(log.action_type)}`}>
-                                                {log.action_type}
-                                            </span>
-                                        </td>
-                                        <td style={{ maxWidth: '300px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                            {log.description || '—'}
-                                        </td>
-                                        <td style={{ fontFamily: 'monospace', fontSize: '0.8rem' }}>{log.ip_address || '—'}</td>
-                                        <td style={{ whiteSpace: 'nowrap' }}>{formatDate(log.created_at)}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    )}
+                            ))}
+                        </tbody>
+                    </table>
                 </div>
-
-                {totalPages > 1 && (
-                    <div className="pagination">
-                        <button disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
-                            ← Назад
-                        </button>
-                        <span>Стр. {page} из {totalPages}</span>
-                        <button disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>
-                            Вперёд →
-                        </button>
-                    </div>
-                )}
             </div>
         </div>
     );

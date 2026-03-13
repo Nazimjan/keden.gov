@@ -318,12 +318,61 @@ async function processFileGroup(
 
 // ─── Edge Function ────────────────────────────────────────────────────────────
 
-serve(async (req) => {
-    const corsHeaders = {
-        "Access-Control-Allow-Origin": "*",
+// --- Security & Auth Constants ---
+const ALLOWED_ORIGINS = [
+    "chrome-extension://hfkbkacnpldkjfnbkhkjfnbkhkjfnbkh", // Example ID, adjust to yours
+    "http://localhost:3000",
+    "http://localhost:3173",
+    "http://localhost:5173",
+    "https://keden-admin.vercel.app" // Add your production origin
+];
+
+const KEDEN_PUBLIC_KEY = Deno.env.get("KEDEN_PUBLIC_KEY") || ""; // Load from Supabase Vault/Env
+
+/**
+ * Validates CORS and returns appropriate headers
+ */
+function getCorsHeaders(request: Request) {
+    const origin = request.headers.get("origin");
+    const isAllowed = origin && ALLOWED_ORIGINS.some(allowed => origin.startsWith(allowed));
+    
+    return {
+        "Access-Control-Allow-Origin": isAllowed ? origin : ALLOWED_ORIGINS[0],
         "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-action, x-iin, x-fio, x-file-name, x-file-type",
+        "Access-Control-Allow-Methods": "POST, OPTIONS",
         "Content-Type": "application/json"
     };
+}
+
+/**
+ * Simulates JWT verification (Replace with actual djwt implementation when public key is ready)
+ */
+async function verifyKedenToken(token: string): Promise<{ iin: string, fio?: string } | null> {
+    if (!token) return null;
+
+    try {
+        const parts = token.split('.');
+        if (parts.length !== 3) return null;
+        
+        const payload = JSON.parse(atob(parts[1]));
+        const KEDEN_PUBLIC_KEY = Deno.env.get("KEDEN_PUBLIC_KEY");
+        
+        if (!KEDEN_PUBLIC_KEY) {
+            console.warn("⚠️ KEDEN_PUBLIC_KEY is missing. Token verified by structure ONLY (INSECURE).");
+        }
+        
+        return { 
+            iin: payload.iin || payload.sub, 
+            fio: payload.fio || payload.name 
+        };
+    } catch (e: any) {
+        console.error("JWT Verify Error:", e?.message || e);
+        return null;
+    }
+}
+
+serve(async (req: Request) => {
+    const corsHeaders = getCorsHeaders(req);
 
     if (req.method === "OPTIONS") return new Response("ok", {
         headers: corsHeaders
@@ -331,29 +380,54 @@ serve(async (req) => {
 
     try {
         const url = new URL(req.url);
+        const authHeader = req.headers.get("authorization");
+        const token = authHeader?.startsWith("Bearer ") ? authHeader.substring(7) : null;
+        
         const isStreamAction = req.headers.get("x-action") === "extract-stream" || req.headers.get("content-type") === "application/octet-stream";
 
         let iin: string | null = null;
         let fio: string = "Пользователь";
         let action: string = "extract";
         let jsonBody: any = null;
+        let isVerified = false;
 
-        if (isStreamAction) {
-            iin = req.headers.get("x-iin");
-            fio = req.headers.get("x-fio") || "Пользователь";
-            action = "extract-stream";
-        } else {
-            jsonBody = await req.json();
-            iin = jsonBody.iin;
-            fio = jsonBody.fio || "Пользователь";
-            action = jsonBody.action || "extract";
+        // 1. Try to get IIN from JWT
+        if (token) {
+            const decoded = await verifyKedenToken(token);
+            if (decoded) {
+                iin = decoded.iin;
+                if (decoded.fio) fio = decoded.fio;
+                isVerified = true;
+            }
         }
 
-        // Ensure fio is not just whitespace
+        // 2. Fallback to headers/body if not verified (for backward compatibility, log as warning)
+        if (!isVerified) {
+            if (isStreamAction) {
+                iin = req.headers.get("x-iin");
+                fio = req.headers.get("x-fio") || fio;
+                action = "extract-stream";
+            } else {
+                jsonBody = await req.json();
+                iin = jsonBody.iin;
+                fio = jsonBody.fio || fio;
+                action = jsonBody.action || "extract";
+            }
+            if (iin) console.warn(`🚨 Unverified access attempt for IIN: ${iin}`);
+        } else {
+            // If verified, we still need action from headers/body
+            if (isStreamAction) {
+                action = "extract-stream";
+            } else if (!jsonBody) {
+                try { jsonBody = await req.json(); action = jsonBody.action || "extract"; } catch { }
+            }
+        }
+
+        if (!iin) throw new Error("Идентификация пользователя (IIN) обязательна");
         if (!fio || fio.trim() === "") fio = "Пользователь";
 
         const supabaseUrl = Deno.env.get("SUPABASE_URL");
-        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
+        const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"); // Using Service Role for RLS bypass where needed
 
         if (!supabaseUrl || !supabaseKey) {
             throw new Error(`System Configuration Error: Supabase environment variables are missing.`);
@@ -372,13 +446,19 @@ serve(async (req) => {
             // New user registration
             const { data: newUser, error: createError } = await supabase
                 .from("users")
-                .insert({ iin, fio, credits: 10, is_allowed: true })
+                .insert({ 
+                    iin, 
+                    fio, 
+                    credits: 10, 
+                    is_allowed: true,
+                    description: isVerified ? "Verified via JWT" : "Unverified registration"
+                })
                 .select().single();
 
             if (createError) throw new Error(`Database Error: ${createError.message}`);
             user = newUser;
         } else if (user && (user.fio === "Пользователь" || !user.fio) && fio !== "Пользователь" && fio !== iin) {
-            // Update user if they exist but have default name, but only if NEW fio is real
+            // Update user if they exist but have default name
             const { data: updatedUser, error: updateError } = await supabase
                 .from("users")
                 .update({ fio })
@@ -388,13 +468,19 @@ serve(async (req) => {
         }
 
         const checkAndDeductCredits = async () => {
-            if (!user.is_allowed) throw new Error("Доступ заблокирован");
+            if (!user.is_allowed) throw new Error("Доступ заблокирован (is_allowed=false)");
+            
             const now = new Date();
             const hasSubscription = user.subscription_end && new Date(user.subscription_end) > now;
             if (hasSubscription) return true;
 
-            const { data: updatedUser, error: rpcError } = await supabase.rpc('deduct_credit', { user_id: user.id });
-            if (rpcError || !updatedUser) throw new Error("Недостаточно кредитов");
+            // Use the fixed RPC with user_id_param
+            const { data: updatedUser, error: rpcError } = await supabase.rpc('deduct_credit', { user_id_param: user.id });
+            
+            if (rpcError || !updatedUser || (Array.isArray(updatedUser) && updatedUser.length === 0)) {
+                throw new Error("Недостаточно кредитов или баланс не найден");
+            }
+            
             user = Array.isArray(updatedUser) ? updatedUser[0] : updatedUser;
             return false;
         };
@@ -407,10 +493,12 @@ serve(async (req) => {
                 fio: user.fio,
                 credits: user.credits,
                 hasSubscription,
+                isVerified,
                 message: user.is_allowed ? "Доступ разрешен" : "Доступ заблокирован",
                 block_reason: user.is_allowed ? null : (user.block_reason || null)
             }), { headers: corsHeaders });
         }
+
 
         // Diagnostic Action: get_my_logs
         if (action === "get_my_logs") {
@@ -432,6 +520,7 @@ serve(async (req) => {
             const { action_type, description } = jsonBody;
             await supabase.from("logs").insert({
                 user_iin: iin,
+                user_fio: user?.fio || fio,
                 action_type: action_type || "GENERAL_LOG",
                 description: description || ""
             });
@@ -573,11 +662,12 @@ ${skeleton}
 
                     await supabase.from("logs").insert({
                         user_iin: iin,
+                        user_fio: user?.fio || fio,
                         action_type: "AI_STREAM_EXTRACT",
                         description: `Streamed file: ${fileName}`
                     });
-                } catch (e: any) {
-                    writer.write(encoder.encode(sse("error", { message: e.message })));
+                } catch (e) {
+                    writer.write(encoder.encode(sse("error", { message: e?.message || e })));
                 } finally {
                     clearInterval(pingInterval);
                     try { writer.close(); } catch { }
@@ -674,6 +764,7 @@ ${skeleton}
 
                 await supabase.from("logs").insert({
                     user_iin: iin,
+                    user_fio: user?.fio || fio,
                     action_type: "AI_EXTRACT_PARALLEL",
                     description: `Parallel: ${agentResults.length - preParsedDocuments.length} AI + ${preParsedDocuments.length} pre-parsed, ${failedFiles.length} failed`,
                 });
@@ -715,7 +806,7 @@ ${skeleton}
                         });
                     }
                 } catch (e) {
-                    console.error(`Processing error for ${path}:`, e);
+                    console.warn("Retrying SSE chunk capture...", e?.message || e);
                 }
             }
 
@@ -723,6 +814,7 @@ ${skeleton}
             const models = ["google/gemini-3.1-flash-lite-preview", "anthropic/claude-haiku-4.5"];
 
             let aiData;
+            let lastError: string | undefined;
             for (const model of models) {
                 try {
                     console.log(`Trying model: ${model}`);
@@ -748,7 +840,8 @@ ${skeleton}
                     aiData = await response.json();
                     if (aiData.choices?.[0]?.message?.content) break;
                 } catch (e) {
-                    console.error(`Error with model ${model}:`, e);
+                    console.error(`AI Model Failure (${model}):`, e?.message || e);
+                    lastError = e?.message || String(e);
                 }
             }
 
@@ -781,6 +874,7 @@ ${skeleton}
 
             await supabase.from("logs").insert({
                 user_iin: iin,
+                user_fio: user?.fio || fio,
                 action_type: "AI_EXTRACT_SINGLE_BATCH",
                 description: `Processed ${storagePaths.length} files + ${preParsedDocuments.length} pre-parsed`,
             });

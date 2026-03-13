@@ -4,16 +4,13 @@ import { api } from './api.js';
 function Users() {
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [showModal, setShowModal] = useState(false);
-    const [newIin, setNewIin] = useState('');
-    const [newFio, setNewFio] = useState('');
-    const [error, setError] = useState('');
-    const [success, setSuccess] = useState('');
-    const [search, setSearch] = useState('');
-    const [deleteConfirmId, setDeleteConfirmId] = useState(null);
-    const [editUser, setEditUser] = useState(null);
-    const [editCredits, setEditCredits] = useState('');
-    const [editSubEnd, setEditSubEnd] = useState('');
+    const [showAdd, setShowAdd] = useState(false);
+    const [newUser, setNewUser] = useState({ iin: '', fio: '' });
+    const [processingId, setProcessingId] = useState(null);
+    
+    // Management state
+    const [editingUser, setEditingUser] = useState(null);
+    const [editData, setEditData] = useState({ credits: 0, subscription_end: '', block_reason: '' });
 
     useEffect(() => {
         loadUsers();
@@ -24,7 +21,7 @@ function Users() {
             const data = await api.getUsers();
             setUsers(data);
         } catch (err) {
-            setError(err.message);
+            console.error('Ошибка загрузки пользователей:', err);
         } finally {
             setLoading(false);
         }
@@ -32,280 +29,238 @@ function Users() {
 
     const handleAdd = async (e) => {
         e.preventDefault();
-        setError('');
-
         try {
-            await api.addUser(newIin, newFio);
-            setShowModal(false);
-            setNewIin('');
-            setNewFio('');
-            setSuccess('Пользователь успешно добавлен');
-            setTimeout(() => setSuccess(''), 3000);
+            await api.addUser(newUser.iin, newUser.fio);
+            setNewUser({ iin: '', fio: '' });
+            setShowAdd(false);
             loadUsers();
         } catch (err) {
-            setError(err.message);
+            alert('Ошибка добавления: ' + err.message);
         }
     };
 
-    const handleToggle = async (user) => {
-        try {
-            await api.updateUser(user.id, { is_allowed: !user.is_allowed });
-            loadUsers();
-        } catch (err) {
-            setError(err.message);
+    const handleDelete = async (id) => {
+        if (window.confirm('УДАЛИТЬ ПОЛЬЗОВАТЕЛЯ ИЗ СИСТЕМЫ?')) {
+            try {
+                await api.deleteUser(id);
+                loadUsers();
+            } catch (err) {
+                alert('Ошибка удаления: ' + err.message);
+            }
         }
     };
 
-    const handleDelete = async (user) => {
-        try {
-            await api.deleteUser(user.id);
-            setDeleteConfirmId(null);
-            setSuccess('Пользователь удален');
-            setTimeout(() => setSuccess(''), 3000);
-            loadUsers();
-        } catch (err) {
-            setError(err.message);
-        }
+    const startEdit = (user) => {
+        setEditingUser(user);
+        setEditData({
+            credits: user.credits || 0,
+            subscription_end: user.subscription_end ? user.subscription_end.split('T')[0] : '',
+            block_reason: user.block_reason || ''
+        });
     };
 
-    const handleEditOpen = (user) => {
-        setError('');
-        setEditUser(user);
-        setEditCredits(user.credits || 0);
-        setEditSubEnd(user.subscription_end || '');
-    };
-
-    const handleEditSave = async (e) => {
+    const handleUpdateUser = async (e) => {
         e.preventDefault();
-        setError('');
+        setProcessingId(editingUser.id);
         try {
-            await api.updateUser(editUser.id, {
-                credits: parseInt(editCredits) || 0,
-                subscription_end: editSubEnd || null
+            await api.updateUser(editingUser.id, {
+                credits: parseInt(editData.credits),
+                subscription_end: editData.subscription_end || null,
+                block_reason: editData.block_reason
             });
-            setEditUser(null);
-            setSuccess('Данные обновлены');
-            setTimeout(() => setSuccess(''), 3000);
+            setEditingUser(null);
             loadUsers();
         } catch (err) {
-            setError(err.message);
+            alert('Ошибка обновления: ' + err.message);
+        } finally {
+            setProcessingId(null);
         }
     };
 
-    const formatDate = (date) => {
-        if (!date) return '—';
+    const toggleAccess = async (user) => {
+        const nextState = !user.is_allowed;
+        let reason = user.block_reason;
+
+        if (!nextState) {
+            const inputReason = window.prompt('УКАЖИТЕ ПРИЧИНУ БЛОКИРОВКИ:', user.block_reason || '');
+            if (inputReason === null) return; // Cancelled
+            reason = inputReason;
+        } else {
+            // If unblocking, maybe keep reason or clear it? Let's clear it for now or keep it as history.
+            // User requested "note to lock", usually stays.
+        }
+
+        setProcessingId(user.id);
         try {
-            const d = new Date(date);
-            if (isNaN(d.getTime())) return '—';
-            return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-        } catch { return '—'; }
+            await api.updateUser(user.id, { 
+                is_allowed: nextState,
+                block_reason: reason 
+            });
+            await loadUsers();
+        } catch (err) {
+            alert('СБОЙ ОПЕРАЦИИ: ' + err.message);
+        } finally {
+            setProcessingId(null);
+        }
     };
 
-    const filtered = users.filter(u =>
-        u.iin.includes(search) || u.fio.toLowerCase().includes(search.toLowerCase())
-    );
-
-    if (loading) {
-        return <div className="loading-center"><div className="spinner" /></div>;
-    }
+    if (loading) return <div className="loading-state h-full flex items-center justify-center mono">ЗАГРУЗКА БАЗЫ...</div>;
 
     return (
-        <div>
-            <div className="page-header">
-                <h2>👥 Пользователи</h2>
-                <button className="btn btn-primary" onClick={() => { setShowModal(true); setError(''); }}>
-                    ➕ Добавить
+        <div className="reveal">
+            <header className="page-header">
+                <div>
+                  <span className="mono" style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>УПРАВЛЕНИЕ ДОСТУПОМ</span>
+                  <h2>ПОЛЬЗОВАТЕЛИ</h2>
+                </div>
+                <button className="btn btn-primary" onClick={() => setShowAdd(!showAdd)}>
+                    {showAdd ? '✖ ОТМЕНА' : '➕ ДОБАВИТЬ'}
                 </button>
-            </div>
+            </header>
 
-            {error && <div className="alert alert-error">❌ {error}</div>}
-            {success && <div className="alert alert-success">✅ {success}</div>}
-
-            <div className="card">
-                <div className="card-header">
-                    <h3>Список пользователей ({filtered.length})</h3>
-                    <div className="search-bar">
-                        <span className="search-icon">🔍</span>
-                        <input
-                            type="text"
-                            placeholder="Поиск по ИИН или ФИО..."
-                            value={search}
-                            onChange={(e) => setSearch(e.target.value)}
-                        />
+            {showAdd && (
+                <div className="card reveal" style={{ maxWidth: '600px' }}>
+                    <div className="card-header">
+                      <h3>РЕГИСТРАЦИЯ НОВОГО ПОЛЬЗОВАТЕЛЯ</h3>
                     </div>
-                </div>
-                <div className="card-body">
-                    {filtered.length === 0 ? (
-                        <div className="empty-state">
-                            <div className="icon">👤</div>
-                            <p>Пользователи не найдены</p>
+                    <form onSubmit={handleAdd} className="card-body">
+                        <div className="form-group">
+                            <label>ИИН (Гос. идентификатор)</label>
+                            <input
+                                type="text"
+                                value={newUser.iin}
+                                onChange={e => setNewUser({ ...newUser, iin: e.target.value })}
+                                placeholder="12 цифр ИИН"
+                                required
+                            />
                         </div>
-                    ) : (
-                        <table className="data-table">
-                            <thead>
-                                <tr>
-                                    <th>ИИН</th>
-                                    <th>ФИО</th>
-                                    <th>Статус</th>
-                                    <th>Доступ</th>
-                                    <th>Подписка</th>
-                                    <th>Кредиты</th>
-                                    <th>Добавлен</th>
-                                    <th>Последняя активность</th>
-                                    <th>Действия</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {filtered.map((user) => (
-                                    <tr key={user.id}>
-                                        <td style={{ fontFamily: 'monospace', fontWeight: 600 }}>{user.iin}</td>
-                                        <td>{user.fio}</td>
-                                        <td>
-                                            <span className={`badge ${user.is_allowed ? 'badge-success' : 'badge-danger'}`}>
-                                                {user.is_allowed ? '● Активен' : '● Заблокирован'}
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <label className="toggle-switch">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={!!user.is_allowed}
-                                                    onChange={() => handleToggle(user)}
-                                                />
-                                                <span className="toggle-slider" />
-                                            </label>
-                                        </td>
-                                        <td style={{ whiteSpace: 'nowrap' }}>
-                                            {user.subscription_end
-                                                ? new Date(user.subscription_end) > new Date()
-                                                    ? <span className="badge badge-success">До {user.subscription_end.substring(0, 10)}</span>
-                                                    : <span className="badge badge-danger">Истекла</span>
-                                                : <span style={{ opacity: 0.5 }}>—</span>}
-                                        </td>
-                                        <td>
-                                            <span className="badge">{user.credits || 0} ПИ</span>
-                                        </td>
-                                        <td style={{ whiteSpace: 'nowrap' }}>{formatDate(user.created_at)}</td>
-                                        <td style={{ whiteSpace: 'nowrap' }}>{formatDate(user.last_active)}</td>
-                                        <td>
-                                            <div className="actions-cell">
-                                                <button className="btn btn-outline btn-sm" onClick={() => handleEditOpen(user)} title="Редактировать лимиты">
-                                                    ✏️
-                                                </button>
-                                                {deleteConfirmId === user.id ? (
-                                                    <>
-                                                        <button className="btn btn-danger btn-sm" onClick={() => handleDelete(user)}>
-                                                            ✓ Да
-                                                        </button>
-                                                        <button className="btn btn-outline btn-sm" onClick={() => setDeleteConfirmId(null)}>
-                                                            ✗ Нет
-                                                        </button>
-                                                    </>
-                                                ) : (
-                                                    <button
-                                                        className="btn btn-danger btn-sm"
-                                                        onClick={() => setDeleteConfirmId(user.id)}
-                                                        title="Удалить"
-                                                    >
-                                                        🗑️
-                                                    </button>
-                                                )}
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    )}
-                </div>
-            </div>
-
-            {showModal && (
-                <div className="modal-overlay" onClick={() => setShowModal(false)}>
-                    <div className="modal" onClick={(e) => e.stopPropagation()}>
-                        <h3>➕ Добавить пользователя</h3>
-
-                        {error && !editUser && <div className="alert alert-error">❌ {error}</div>}
-
-                        <form onSubmit={handleAdd}>
-                            <div className="form-group">
-                                <label>ИИН (12 цифр)</label>
-                                <input
-                                    type="text"
-                                    placeholder="123456789012"
-                                    value={newIin}
-                                    onChange={(e) => setNewIin(e.target.value.replace(/\D/g, '').slice(0, 12))}
-                                    maxLength={12}
-                                    autoFocus
-                                />
-                            </div>
-
-                            <div className="form-group">
-                                <label>ФИО</label>
-                                <input
-                                    type="text"
-                                    placeholder="Иванов Иван Иванович"
-                                    value={newFio}
-                                    onChange={(e) => setNewFio(e.target.value)}
-                                />
-                            </div>
-
-                            <div className="modal-actions">
-                                <button type="button" className="btn btn-outline" onClick={() => setShowModal(false)}>
-                                    Отмена
-                                </button>
-                                <button type="submit" className="btn btn-primary" disabled={newIin.length !== 12 || !newFio.trim()}>
-                                    Добавить
-                                </button>
-                            </div>
-                        </form>
-                    </div>
+                        <div className="form-group">
+                            <label>ФИО (Полное имя)</label>
+                            <input
+                                type="text"
+                                value={newUser.fio}
+                                onChange={e => setNewUser({ ...newUser, fio: e.target.value })}
+                                placeholder="Фамилия Имя Отчество"
+                                required
+                            />
+                        </div>
+                        <button type="submit" className="btn btn-primary btn-full">ДОБАВИТЬ В СИСТЕМУ</button>
+                    </form>
                 </div>
             )}
 
-            {editUser && (
-                <div className="modal-overlay" onClick={() => setEditUser(null)}>
-                    <div className="modal" onClick={(e) => e.stopPropagation()}>
-                        <h3>✏️ Редактировать доступ</h3>
-                        <p style={{ marginBottom: '1rem', opacity: 0.8 }}>{editUser.fio} ({editUser.iin})</p>
-
-                        {error && <div className="alert alert-error">❌ {error}</div>}
-
-                        <form onSubmit={handleEditSave}>
+            {editingUser && (
+                <div className="modal-overlay" style={{
+                    position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
+                    backgroundColor: 'rgba(0,0,0,0.8)', zIndex: 1000, display: 'flex',
+                    alignItems: 'center', justifyContent: 'center'
+                }}>
+                    <div className="card reveal" style={{ maxWidth: '500px', width: '90%' }}>
+                        <div className="card-header">
+                            <h3>УПРАВЛЕНИЕ ПОДПИСКОЙ: {editingUser.iin}</h3>
+                        </div>
+                        <form onSubmit={handleUpdateUser} className="card-body">
                             <div className="form-group">
-                                <label>Подписка активна ДО (включительно)</label>
-                                <input
-                                    type="date"
-                                    value={editSubEnd ? editSubEnd.split('T')[0] : ''}
-                                    onChange={(e) => setEditSubEnd(e.target.value)}
-                                />
-                                <small>Если не указано, доступ возможен только по кредитам.</small>
-                            </div>
-
-                            <div className="form-group">
-                                <label>Количество кредитов (ПИ)</label>
+                                <label>КРЕДИТЫ (ЛИМИТ)</label>
                                 <input
                                     type="number"
-                                    min="0"
-                                    placeholder="0"
-                                    value={editCredits}
-                                    onChange={(e) => setEditCredits(e.target.value)}
+                                    value={editData.credits}
+                                    onChange={e => setEditData({ ...editData, credits: e.target.value })}
+                                    required
                                 />
-                                <small>Будут списываться по 1 за каждую отправку ПИ, если нет подписки.</small>
                             </div>
-
-                            <div className="modal-actions">
-                                <button type="button" className="btn btn-outline" onClick={() => setEditUser(null)}>
-                                    Отмена
-                                </button>
-                                <button type="submit" className="btn btn-primary">
-                                    Сохранить
-                                </button>
+                            <div className="form-group">
+                                <label>ДАТА ИСТЕЧЕНИЯ ПОДПИСКИ</label>
+                                <input
+                                    type="date"
+                                    value={editData.subscription_end}
+                                    onChange={e => setEditData({ ...editData, subscription_end: e.target.value })}
+                                />
+                                <small style={{ color: 'var(--text-muted)', fontSize: '0.6rem' }}>ОСТАВЬТЕ ПУСТЫМ ДЛЯ БЕССРОЧНОГО</small>
+                            </div>
+                            <div className="form-group">
+                                <label>ПРИМЕЧАНИЕ / ПРИЧИНА БЛОКИРОВКИ</label>
+                                <textarea
+                                    className="form-group input"
+                                    style={{ width: '100%', background: 'var(--bg-deep)', border: '1px solid var(--border-mid)', color: 'white', padding: '10px' }}
+                                    value={editData.block_reason}
+                                    onChange={e => setEditData({ ...editData, block_reason: e.target.value })}
+                                    placeholder="Например: Вышло критическое обновление!"
+                                />
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px' }}>
+                                <button type="button" className="btn btn-outline flex-1" onClick={() => setEditingUser(null)}>ОТМЕНА</button>
+                                <button type="submit" className="btn btn-primary flex-1" disabled={processingId}>СОХРАНИТЬ</button>
                             </div>
                         </form>
                     </div>
                 </div>
             )}
+
+            <div className="card">
+                <div className="card-body" style={{ padding: '0' }}>
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th>СТАТУС</th>
+                                <th>ИИН</th>
+                                <th>ФИО</th>
+                                <th>КРЕДИТЫ</th>
+                                <th>ИСТЕКАЕТ</th>
+                                <th>ПРИМЕЧАНИЕ</th>
+                                <th style={{ textAlign: 'right' }}>ДЕЙСТВИЯ</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {users.map(user => (
+                                <tr key={user.id}>
+                                    <td>
+                                        <span className={`badge ${user.is_allowed ? 'badge-success' : 'badge-danger'}`}>
+                                            {user.is_allowed ? 'АКТИВЕН' : 'ЗАБЛОК'}
+                                        </span>
+                                    </td>
+                                    <td className="mono" style={{ color: 'var(--text-accent)' }}>{user.iin}</td>
+                                    <td style={{ fontWeight: '600' }}>{user.fio}</td>
+                                    <td className="mono">{user.credits}</td>
+                                    <td className="mono" style={{ fontSize: '0.75rem' }}>
+                                      {user.subscription_end ? new Date(user.subscription_end).toLocaleDateString() : '—'}
+                                    </td>
+                                    <td style={{ fontSize: '0.75rem', maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={user.block_reason}>
+                                        {user.block_reason || '—'}
+                                    </td>
+                                    <td style={{ textAlign: 'right' }}>
+                                        <div className="admin-actions" style={{ justifyContent: 'flex-end', gap: '8px' }}>
+                                          <button 
+                                            className="btn btn-outline" 
+                                            style={{ padding: '6px 12px', fontSize: '0.65rem' }} 
+                                            onClick={() => startEdit(user)}
+                                          >
+                                              ⚙️ НАСТРОЙКИ
+                                          </button>
+                                          <button 
+                                            className={`btn ${user.is_allowed ? 'btn-outline' : 'btn-primary'}`} 
+                                            style={{ padding: '6px 16px', fontSize: '0.65rem', minWidth: '100px' }} 
+                                            onClick={() => toggleAccess(user)}
+                                            disabled={processingId === user.id}
+                                          >
+                                              {processingId === user.id ? '...' : (user.is_allowed ? '🔒 БЛОК' : '🔓 ДОСТУП')}
+                                          </button>
+                                          <button 
+                                            className="btn btn-danger" 
+                                            style={{ padding: '6px 12px', fontSize: '0.65rem' }} 
+                                            onClick={() => handleDelete(user.id)}
+                                            disabled={processingId === user.id}
+                                          >
+                                              ✖
+                                          </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
     );
 }
