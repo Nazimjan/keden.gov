@@ -16,7 +16,8 @@ export async function calculateSemanticSimilarity(s1: string, s2: string, apiKey
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    content: { parts: [{ text }] }
+                    content: { parts: [{ text }] },
+                    outputDimensionality: 1536
                 })
             });
             if (!res.ok) throw new Error(`Embedding error: ${res.status}`);

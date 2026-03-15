@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { getBatchPrompt, SYSTEM_PROMPT, PER_FILE_SYSTEM_PROMPT, getPerFilePrompt } from "./prompts.ts";
 import { mergeAgentResults } from "./merger.ts";
+import { PDFDocument } from "https://cdn.skypack.dev/pdf-lib";
 
 const OPENROUTER_API_KEY = Deno.env.get("OPENROUTER_API_KEY");
 const GOOGLE_AI_KEY = Deno.env.get("GOOGLE_AI_KEY");
@@ -242,17 +243,72 @@ async function processFileGroup(
     const fileContents: any[] = [];
     for (const path of group.paths) {
         try {
+            // 1. Проверка метаданных перед загрузкой (чтобы не качать гигантов)
+            const { data: info } = await supabase.storage.from("documents").list(path.split('/').slice(0,-1).join('/'), {
+                search: path.split('/').pop()
+            });
+            // Если файл > 45MB, не пытаемся его обработать в ОЗУ
+            // (Download bloat + pdf-lib parsing может превысить 256/512MB)
+
             const { data, error } = await supabase.storage.from("documents").download(path);
             if (error || !data) continue;
+            
+            if (data.size > 45 * 1024 * 1024) {
+                console.warn(`[RAM Safety] File ${group.originalName} is too large (${(data.size/1024/1024).toFixed(1)}MB). Skipping AI extraction.`);
+                fileContents.push({ type: "text", text: `[Файл ${group.originalName} слишком велик для ИИ-анализа и был пропущен]` });
+                continue;
+            }
+
             const buffer = await data.arrayBuffer();
-            if (data.type.startsWith("image/") || data.type === "application/pdf") {
+            const mimeType = data.type;
+
+            if (mimeType === "application/pdf") {
+                const pdfDoc = await PDFDocument.load(buffer);
+                const pageCount = pdfDoc.getPageCount();
+
+                if (pageCount > 6) {
+                    console.log(`[multimodal] Splitting large PDF (${pageCount} pages): ${group.originalName}`);
+                    // Split logic: process in chunks of 6 pages
+                    for (let i = 0; i < pageCount; i += 6) {
+                        const subDoc = await PDFDocument.create();
+                        const end = Math.min(i + 6, pageCount);
+                        const pages = await subDoc.copyPages(pdfDoc, Array.from({ length: end - i }, (_, k) => i + k));
+                        pages.forEach((p: any) => subDoc.addPage(p));
+                        const subBuffer = await subDoc.save();
+                        const uint8 = new Uint8Array(subBuffer);
+                        let binary = "";
+                        const chunk_size = 16384;
+                        for (let k = 0; k < uint8.length; k += chunk_size) {
+                            binary += String.fromCharCode(...uint8.subarray(k, k + chunk_size));
+                        }
+                        fileContents.push({ 
+                            type: "image_url", 
+                            image_url: { url: `data:application/pdf;base64,${btoa(binary)}` } 
+                        });
+                    }
+                } else {
+                    const uint8 = new Uint8Array(buffer);
+                    let binary = "";
+                    const chunk_size = 16384;
+                    for (let k = 0; k < uint8.length; k += chunk_size) {
+                        binary += String.fromCharCode(...uint8.subarray(k, k + chunk_size));
+                    }
+                    fileContents.push({ 
+                        type: "image_url", 
+                        image_url: { url: `data:application/pdf;base64,${btoa(binary)}` } 
+                    });
+                }
+            } else if (mimeType.startsWith("image/")) {
                 const uint8 = new Uint8Array(buffer);
                 let binary = "";
                 const chunk_size = 16384;
                 for (let k = 0; k < uint8.length; k += chunk_size) {
                     binary += String.fromCharCode(...uint8.subarray(k, k + chunk_size));
                 }
-                fileContents.push({ type: "image_url", image_url: { url: `data:${data.type};base64,${btoa(binary)}` } });
+                fileContents.push({ 
+                    type: "image_url", 
+                    image_url: { url: `data:${mimeType};base64,${btoa(binary)}` } 
+                });
             } else {
                 fileContents.push({
                     type: "text",
@@ -666,7 +722,7 @@ ${skeleton}
                         action_type: "AI_STREAM_EXTRACT",
                         description: `Streamed file: ${fileName}`
                     });
-                } catch (e) {
+                } catch (e: any) {
                     writer.write(encoder.encode(sse("error", { message: e?.message || e })));
                 } finally {
                     clearInterval(pingInterval);
@@ -727,8 +783,8 @@ ${skeleton}
 
                 if (storagePaths.length > 0) {
                     const groups = groupFilesByName(storagePaths, originalFileNames);
-                    const models = ["google/gemini-3.1-flash-lite-preview", "anthropic/claude-haiku-4.5"];
-                    const sem = createSemaphore(8);
+                    const models = ["google/gemini-3.1-flash-lite-preview", "google/gemini-2.0-flash"];
+                    const sem = createSemaphore(1); // "One file - one request" strict limit
 
                     const promises = Array.from(groups.values()).map((group) =>
                         sem(() => processFileGroup(supabase, group, models))
@@ -805,7 +861,7 @@ ${skeleton}
                             text: `--- Content of ${originalName} ---\n${new TextDecoder().decode(buffer)}`
                         });
                     }
-                } catch (e) {
+                } catch (e: any) {
                     console.warn("Retrying SSE chunk capture...", e?.message || e);
                 }
             }
@@ -839,7 +895,7 @@ ${skeleton}
                     if (!response.ok) continue;
                     aiData = await response.json();
                     if (aiData.choices?.[0]?.message?.content) break;
-                } catch (e) {
+                } catch (e: any) {
                     console.error(`AI Model Failure (${model}):`, e?.message || e);
                     lastError = e?.message || String(e);
                 }

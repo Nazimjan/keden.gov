@@ -374,22 +374,7 @@ document.getElementById('startBtn').onclick = async () => {
             let mimeType = file.type || 'application/octet-stream';
 
             try {
-                if (fileName.endsWith('.pdf')) {
-                    try {
-                        let text = await readPDF(file);
-                        // Если PDF цифровой (есть текст), используем текст - это быстрее и дешевле
-                        if (text.trim().length < 100) throw new Error('Scan detected');
-
-                        const MAX_CHARS = 30000;
-                        if (text.length > MAX_CHARS) {
-                            text = text.substring(0, MAX_CHARS) + '\n... [TRUNCATED]';
-                        }
-                        filePart = { text: `--- FILE: ${file.name} (PDF Content) ---\n${text}\n` };
-                    } catch (pdfErr) {
-                        console.log(`📎 ${file.name}: скан PDF, рендерим страницы как изображения...`);
-                        filePart = await renderPDFPagesAsImages(file, 5); // рендерим первые 5 страниц
-                    }
-                } else if (isExcel) {
+                if (isExcel) {
                     console.log(`📊 ${file.name}: Excel, определяем режим парсинга...`);
                     const largeParsed = await readExcelLarge(file, currentUserInfo?.iin);
                     if (largeParsed) {
@@ -404,17 +389,12 @@ document.getElementById('startBtn').onclick = async () => {
                         }
                         filePart = { text: `--- FILE: ${file.name} (Excel Content) ---\n${text}\n` };
                     }
-                } else if (isImage) {
-                    console.log(`🖼️ ${file.name}: изображение, отправляем на анализ...`);
-                    const base64 = await fileToOptimizedBase64(file);
-                    filePart = { inlineData: { data: base64, mimeType: 'image/jpeg' } };
                 } else {
-                    let text = await file.text();
-                    const MAX_CHARS = 30000;
-                    if (text.length > MAX_CHARS) {
-                        text = text.substring(0, MAX_CHARS) + '\n... [TRUNCATED]';
-                    }
-                    filePart = { text: `--- FILE: ${file.name} (Text Content) ---\n${text}\n` };
+                    // Все остальные файлы (PDF, изображения, документы) отправляем как Raw Base64
+                    // Мультимодальный ИИ сам разберется с контентом
+                    console.log(`📎 ${file.name}: подготовка мультимодального пакета (${mimeType})...`);
+                    const result = await fileToRawBase64(file);
+                    filePart = { inlineData: result };
                 }
             } catch (prepErr) {
                 console.warn(`Ошибка подготовки ${file.name}:`, prepErr);

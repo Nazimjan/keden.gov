@@ -28,6 +28,8 @@ const NOISY_WARNING_PATTERNS: RegExp[] = [
     // "Установлено текущее значение по умолчанию" — технический fallback AI
     /установлено текущее значение по умолчанию/i,
     /default value (has been )?set/i,
+    /детализация товаров отсутствует, так как в документе CMR/i,
+    /в графе 6 указано.*детализация товаров отсутствует/i,
 ];
 
 /**
@@ -316,6 +318,7 @@ function buildProgrammaticCrossChecks(merged: any, mentions: any, agentResults: 
         }
     }
 
+
     // 3. ИМЕНА контрагентов из mentions
     for (const role of ["consignor", "consignee"] as const) {
         if (mentions[role].length === 0) continue;
@@ -331,6 +334,21 @@ function buildProgrammaticCrossChecks(merged: any, mentions: any, agentResults: 
             const fileName = m.source.match(/\((.+)\)$/)?.[1] || m.source;
             const key = `${docTypeLower}:${fileName}`;
             if (!(key in checks.names[role])) checks.names[role][key] = name;
+        }
+    }
+
+    // 3.5 АДРЕСА контрагентов из mentions
+    for (const role of ["consignor", "consignee"] as const) {
+        if (mentions[role].length === 0) continue;
+        if (!checks.addresses) checks.addresses = {};
+        if (!checks.addresses[role]) checks.addresses[role] = {};
+        for (const m of mentions[role]) {
+            const address: string = m.data.addresses?.[0]?.fullAddress || "";
+            if (address.length < 5) continue;
+            const docTypeLower = (m.docType || "other").toLowerCase();
+            const fileName = m.source.match(/\((.+)\)$/)?.[1] || m.source;
+            const key = `${docTypeLower}:${fileName}`;
+            if (!(key in checks.addresses[role])) checks.addresses[role][key] = address;
         }
     }
 
@@ -771,6 +789,66 @@ async function compareNamesAllDocuments(
     }
 }
 
+/**
+ * Сравнение адресов отправителя/получателя по всем документам (кросс-чек)
+ */
+async function compareAddressesAllDocuments(
+    checks: any,
+    role: "consignee" | "consignor",
+    merged: any,
+    googleApiKey?: string,
+): Promise<void> {
+    const addrObj = checks?.addresses?.[role];
+    if (!addrObj) return;
+
+    const entries = Object.entries(addrObj)
+        .filter(([key, v]) => typeof v === "string" && (v as string).length > 5 && isRelevantCrossCheckKey(key))
+        .map(([doc, addr]) => ({
+            doc,
+            original: addr as string,
+            normalized: (addr as string).trim().toUpperCase(),
+        }));
+
+    if (entries.length <= 1) return;
+
+    const freq: Record<string, { normalized: string; original: string; docs: string[] }> = {};
+    for (const e of entries) {
+        if (!freq[e.normalized]) {
+            freq[e.normalized] = { normalized: e.normalized, original: e.original, docs: [] };
+        }
+        freq[e.normalized].docs.push(e.doc);
+    }
+
+    const groups = Object.values(freq).sort((a, b) => b.docs.length - a.docs.length);
+    const roleLabel = role === "consignee" ? "получателя" : "отправителя";
+
+    if (groups.length === 1) {
+        merged.validation.warnings.push({
+            message: `Адрес ${roleLabel} совпадает во всех документах ✅`,
+            severity: "SUCCESS",
+        });
+        return;
+    }
+
+    const winner = groups[0];
+    for (const loser of groups.slice(1)) {
+        const sim = googleApiKey
+            ? await calculateSemanticSimilarity(winner.original, loser.original, googleApiKey)
+            : 0;
+        
+        const isTypo = googleApiKey && sim > 0.85;
+        const loserDocs = loser.docs.map((d) => getDocLabel(d)).join(", ");
+        
+        merged.validation.warnings.push({
+            field: `${role}.address`,
+            message: isTypo
+                ? `⚠️ ОПЕЧАТКА В АДРЕСЕ ${roleLabel.toUpperCase()}: «${loser.original}» (${loserDocs}) — принято «${winner.original}».`
+                : `⚠️ КОНФЛИКТ АДРЕСОВ ${roleLabel.toUpperCase()}: «${loser.original}» (${loserDocs}) — принято «${winner.original}».`,
+            severity: "WARNING",
+        });
+    }
+}
+
 async function runProgrammaticCrossChecks(merged: any, googleApiKey?: string) {
     const checks = merged.validation.crossChecks;
     const realSum = merged.validation.realTechnicalSum || 0;
@@ -801,18 +879,26 @@ async function runProgrammaticCrossChecks(merged: any, googleApiKey?: string) {
 
         if (values.length > 1) {
             const first = values[0].val;
-            const allMatch = values.every((v) => v.val === first);
-            if (allMatch) {
-                merged.validation.warnings.push({
-                    message: `Вес совпадает во всех документах: ${first} кг ✅`,
-                    severity: "SUCCESS",
-                });
-            } else {
-                const details = values.map((v) => `${v.doc}: ${v.val}`).join(", ");
-                merged.validation.errors.push({
-                    message: `НЕСООТВЕТСТВИЕ ВЕСА! (${details})`,
-                    severity: "ERROR",
-                });
+            // Считаем погрешность
+            for (let i = 1; i < values.length; i++) {
+                const current = values[i].val;
+                const diff = Math.abs(first - current);
+                const maxVal = Math.max(first, current);
+                const similarity = maxVal > 0 ? 1 - (diff / maxVal) : 1;
+                
+                console.log(`[Similarity Weight] "${first}" vs "${current}" = ${similarity.toFixed(4)}`);
+
+                if (similarity > 0.99) { // Допуск 1%
+                    merged.validation.warnings.push({
+                        message: `Вес «${current}» (${values[i].doc}) практически совпадает с основным значением ${first} ✅`,
+                        severity: "SUCCESS",
+                    });
+                } else {
+                    merged.validation.errors.push({
+                        message: `РАСХОЖДЕНИЕ ВЕСА: ${values[0].doc} (${first}) vs ${values[i].doc} (${current}). Разница: ${diff.toFixed(2)} кг.`,
+                        severity: "ERROR",
+                    });
+                }
             }
         }
     }
@@ -825,18 +911,23 @@ async function runProgrammaticCrossChecks(merged: any, googleApiKey?: string) {
 
         if (values.length > 1) {
             const first = values[0].val;
-            const allMatch = values.every((v) => v.val === first);
-            if (allMatch) {
-                merged.validation.warnings.push({
-                    message: `Количество мест совпадает: ${first} ✅`,
-                    severity: "SUCCESS",
-                });
-            } else {
-                const details = values.map((v) => `${v.doc}: ${v.val}`).join(", ");
-                merged.validation.errors.push({
-                    message: `НЕСООТВЕТСТВИЕ МЕСТ! (${details})`,
-                    severity: "ERROR",
-                });
+            for (let i = 1; i < values.length; i++) {
+                const current = values[i].val;
+                const diff = Math.abs(first - current);
+                // Для мест допуск обычно нулевой, но для Similarity сделаем лог
+                console.log(`[Similarity Packages] "${first}" vs "${current}" = ${first === current ? "1.0000" : "0.0000"}`);
+
+                if (first === current) {
+                    merged.validation.warnings.push({
+                        message: `Количество мест ${first} совпадает (${values[i].doc}) ✅`,
+                        severity: "SUCCESS",
+                    });
+                } else {
+                    merged.validation.errors.push({
+                        message: `НЕСООТВЕТСТВИЕ МЕСТ: ${values[0].doc} (${first}) vs ${values[i].doc} (${current}).`,
+                        severity: "ERROR",
+                    });
+                }
             }
         }
     }
@@ -846,6 +937,12 @@ async function runProgrammaticCrossChecks(merged: any, googleApiKey?: string) {
 
     // 5. ИМЕНА ОТПРАВИТЕЛЯ: все документы, majority vote + семантическая сверка
     await compareNamesAllDocuments(checks, "consignor", merged, googleApiKey);
+
+    // 6. АДРЕСА ПОЛУЧАТЕЛЯ: все документы, majority vote + семантическая сверка
+    await compareAddressesAllDocuments(checks, "consignee", merged, googleApiKey);
+
+    // 7. АДРЕСА ОТПРАВИТЕЛЯ: все документы, majority vote + семантическая сверка
+    await compareAddressesAllDocuments(checks, "consignor", merged, googleApiKey);
 
     // 6. ТРАНСПОРТ: тягач
     if (checks.vehicles?.tractor) {

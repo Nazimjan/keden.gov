@@ -12,50 +12,38 @@ async function readExcel(file) {
     return fullText;
 }
 
-async function readPDF(file) {
+/** Читает Excel и возвращает текстовое представление (CSV) */
+async function readExcel(file) {
     const data = await file.arrayBuffer();
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdf.worker.min.js';
-    const pdf = await pdfjsLib.getDocument({ data }).promise;
+    // cellFormula: false — вычисляет формулы и возвращает значения, а не "=SUM(A1:A5)"
+    const workbook = XLSX.read(data, { cellFormula: false, cellNF: false });
     let fullText = "";
-    for (let i = 1; i <= pdf.numPages; i++) {
-        const page = await pdf.getPage(i);
-        const content = await page.getTextContent();
-        fullText += content.items.map(item => item.str).join(" ") + "\n";
-    }
+    workbook.SheetNames.forEach(name => {
+        const sheet = workbook.Sheets[name];
+        fullText += `--- Лист: ${name} ---\n`;
+        // blankrows: false — убирает пустые строки для экономии токенов
+        fullText += XLSX.utils.sheet_to_csv(sheet, { blankrows: false }) + "\n";
+    });
     return fullText;
 }
 
-/** Рендерит страницы PDF в изображения для отправки в ИИ как сканы */
-async function renderPDFPagesAsImages(file, maxPages = 2) {
-    const data = await file.arrayBuffer();
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/pdf.worker.min.js';
-    const pdf = await pdfjsLib.getDocument({ data }).promise;
-    const images = [];
-
-    // Берем первые maxPages страниц, чтобы не превысить лимиты
-    const pagesToProcess = Math.min(pdf.numPages, maxPages);
-
-    for (let i = 1; i <= pagesToProcess; i++) {
-        const page = await pdf.getPage(i);
-        const viewport = page.getViewport({ scale: 1.1 }); // Оптимально для скорости и OCR
-
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-        canvas.height = viewport.height;
-        canvas.width = viewport.width;
-
-        await page.render({ canvasContext: context, viewport: viewport }).promise;
-
-        // Сжимаем в JPEG 0.7
-        const base64 = canvas.toDataURL('image/jpeg', 0.7);
-        images.push({
-            inlineData: {
-                data: base64.split(',')[1],
-                mimeType: 'image/jpeg'
-            }
-        });
-    }
-    return images;
+/** 
+ * Преобразует любой файл в Base64 пакет для прямого анализа мультимодальным ИИ.
+ * Больше не требует OCR на клиенте.
+ */
+async function fileToRawBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const base64 = reader.result.split(',')[1];
+            resolve({
+                data: base64,
+                mimeType: file.type || 'application/octet-stream'
+            });
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
 }
 
 async function fileToBase64(file) {
